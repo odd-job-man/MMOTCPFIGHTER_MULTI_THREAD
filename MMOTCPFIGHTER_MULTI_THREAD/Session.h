@@ -21,6 +21,8 @@ struct Session
 	ID id;
 	BOOL bSendingInProgress;
 	BOOL bUsing;
+	DWORD dwLastRecvTime;
+	void* pClient;
 	LONG lSendBufNum;
 	LONG IoCnt;
 	WSAOVERLAPPED recvOverlapped;
