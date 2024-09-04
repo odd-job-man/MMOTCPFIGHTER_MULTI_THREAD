@@ -127,20 +127,33 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="GameServer.cpp" />
     <ClCompile Include="LanServer.cpp" />
+    <ClCompile Include="LinkedList.cpp" />
     <ClCompile Include="Packet.cpp" />
     <ClCompile Include="RingBuffer.cpp" />
+    <ClCompile Include="SCCContents.cpp" />
+    <ClCompile Include="Sector.cpp" />
     <ClCompile Include="Session.cpp" />
     <ClCompile Include="Stack.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Client.h" />
+    <ClInclude Include="Constant.h" />
+    <ClInclude Include="Direction.h" />
     <ClInclude Include="FreeList.h" />
     <ClInclude Include="FreeListNode.h" />
+    <ClInclude Include="GameServer.h" />
+    <ClInclude Include="ID.h" />
     <ClInclude Include="IHandler.h" />
     <ClInclude Include="LanServer.h" />
+    <ClInclude Include="LinkedList.h" />
     <ClInclude Include="Logger.h" />
     <ClInclude Include="Packet.h" />
+    <ClInclude Include="Position.h" />
     <ClInclude Include="RingBuffer.h" />
+    <ClInclude Include="SCCContents.h" />
+    <ClInclude Include="Sector.h" />
     <ClInclude Include="Session.h" />
     <ClInclude Include="Stack.h" />
   </ItemGroup>

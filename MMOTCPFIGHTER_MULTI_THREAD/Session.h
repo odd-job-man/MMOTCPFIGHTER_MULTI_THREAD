@@ -1,5 +1,6 @@
 #pragma once
 #include "RingBuffer.h"
+#include "ID.h"
 
 //#define IO_RET
 
@@ -9,11 +10,6 @@ do{\
 Ret.ullId = Ret.ullId << 16;\
 Ret.ullId ^= index;\
 }while(0)\
-
-union ID
-{
-	ULONGLONG ullId;
-};
 
 struct Session
 {

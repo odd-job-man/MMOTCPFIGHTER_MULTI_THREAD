@@ -1,7 +1,12 @@
 #pragma once
 #include <memory.h>
 
-typedef short NET_HEADER;
+//typedef short NET_HEADER;
+struct NET_HEADER
+{
+	BYTE byCode;
+	BYTE byLen;
+};
 
 class Packet
 {
