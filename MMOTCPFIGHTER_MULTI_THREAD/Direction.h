@@ -1,14 +1,6 @@
 #pragma once
-#pragma once
-constexpr BYTE dfPACKET_MOVE_DIR_LL = 0;
-constexpr BYTE dfPACKET_MOVE_DIR_LU = 1;
-constexpr BYTE dfPACKET_MOVE_DIR_UU = 2;
-constexpr BYTE dfPACKET_MOVE_DIR_RU = 3;
-constexpr BYTE dfPACKET_MOVE_DIR_RR = 4;
-constexpr BYTE dfPACKET_MOVE_DIR_RD = 5;
-constexpr BYTE dfPACKET_MOVE_DIR_DD = 6;
-constexpr BYTE dfPACKET_MOVE_DIR_LD = 7;
-constexpr BYTE dfPACKET_MOVE_DIR_NOMOVE = 8;
+#include "MOVE_DIR.h"
+
 
 constexpr BYTE MOVE = 1;
 constexpr BYTE NOMOVE = 0;
@@ -48,35 +40,35 @@ constexpr DirVector vArr[8]{
 };
 
 // 이동후 OldSector에서 현재 캐릭터의 이동방향을 해당 배열의 인덱스로 대입해서 얻은 방향을 GetDeltaSector에 대입
-constexpr BYTE removeDirArr[8] =
+constexpr MOVE_DIR removeDirArr[8] =
 {
-	dfPACKET_MOVE_DIR_RU, //LL
-	dfPACKET_MOVE_DIR_RU, //LU
-	dfPACKET_MOVE_DIR_RD, //UU
-	dfPACKET_MOVE_DIR_RD, //RU
-	dfPACKET_MOVE_DIR_LD, //RR
-	dfPACKET_MOVE_DIR_LD, //RD
-	dfPACKET_MOVE_DIR_LU, //DD
-	dfPACKET_MOVE_DIR_LU, //LD
+	MOVE_DIR_RU, //LL
+	MOVE_DIR_RU, //LU
+	MOVE_DIR_RD, //UU
+	MOVE_DIR_RD, //RU
+	MOVE_DIR_LD, //RR
+	MOVE_DIR_LD, //RD
+	MOVE_DIR_LU, //DD
+	MOVE_DIR_LU, //LD
 };
 
 // 이동후 NewSecotr에서 현재 캐릭터의 이동방향을 해당 배열의 인덱스로 대입해서 얻은 방향을 GetDeltaSctor에 대입
-constexpr BYTE AddDirArr[8] =
+constexpr MOVE_DIR AddDirArr[8] =
 {
-	dfPACKET_MOVE_DIR_LD, //LL
-	dfPACKET_MOVE_DIR_LD, //LU
-	dfPACKET_MOVE_DIR_LU, //UU
-	dfPACKET_MOVE_DIR_LU, //RU,
-	dfPACKET_MOVE_DIR_RU, //RR
-	dfPACKET_MOVE_DIR_RU, //RD
-	dfPACKET_MOVE_DIR_RD, //DD
-	dfPACKET_MOVE_DIR_RD, //LD
+	MOVE_DIR_LD, //LL
+	MOVE_DIR_LD, //LU
+	MOVE_DIR_LU, //UU
+	MOVE_DIR_LU, //RU,
+	MOVE_DIR_RU, //RR
+	MOVE_DIR_RU, //RD
+	MOVE_DIR_RD, //DD
+	MOVE_DIR_RD, //LD
 };
 
-constexpr BYTE SectorMoveDir[3][3]
+constexpr MOVE_DIR SectorMoveDir[3][3]
 {
 
-	{dfPACKET_MOVE_DIR_LU,dfPACKET_MOVE_DIR_UU,dfPACKET_MOVE_DIR_RU} ,
-	{dfPACKET_MOVE_DIR_LL,dfPACKET_MOVE_DIR_NOMOVE,dfPACKET_MOVE_DIR_RR},
-	{dfPACKET_MOVE_DIR_LD,dfPACKET_MOVE_DIR_DD,dfPACKET_MOVE_DIR_RD}
+	{MOVE_DIR_LU,MOVE_DIR_UU,MOVE_DIR_RU} ,
+	{MOVE_DIR_LL,MOVE_DIR_NOMOVE,MOVE_DIR_RR},
+	{MOVE_DIR_LD,MOVE_DIR_DD,MOVE_DIR_RD}
 };

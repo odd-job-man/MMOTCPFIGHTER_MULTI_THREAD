@@ -1,26 +1,40 @@
-#include "SCCContents.h"
+#include <windows.h>
 #include "ID.h"
+#include "MOVE_DIR.h"
+#include "SCCContents.h"
 
-// 기존 프로토콜에서의 ID가 4바이트라 어쩔수없이 억지스럽게 만들어냄
-__forceinline DWORD ServerIDToClientID(ID id)
-{
-	DWORD dwRetId = (DWORD)(id.ullId >> 16);
-	return dwRetId;
-}
 
 __forceinline void MAKE_HEADER(BYTE byPacketType, Packet* pPacket)
 {
 	(*pPacket) << byPacketType;
 }
 
-void MAKE_SC_CREATE_MY_CHARACTER(ID destId, BYTE byDirection, Pos pos, CHAR chHP, Packet* pPacket)
+void MAKE_SC_CREATE_MY_CHARACTER(DWORD dwDestId, MOVE_DIR viewDir, Pos pos, CHAR chHP, Packet* pPacket)
 {
 	MAKE_HEADER(dfPACKET_SC_CREATE_MY_CHARACTER, pPacket);
-	(*pPacket) << ServerIDToClientID(destId) << byDirection << pos.shX << pos.shY << chHP;
+	(*pPacket) << dwDestId << MOVE_DIR_TO_BYTE(viewDir) << pos.shX << pos.shY << chHP;
 }
 
-void MAKE_SC_CREATE_OTHER_CHARACTER(ID CreateId, BYTE byDirection, Pos pos, CHAR chHP, Packet* pPacket)
+void MAKE_SC_CREATE_OTHER_CHARACTER(DWORD dwCreateId, MOVE_DIR viewDir, Pos pos, CHAR chHP, Packet* pPacket)
 {
 	MAKE_HEADER(dfPACKET_SC_CREATE_OTHER_CHARACTER, pPacket);
-	(*pPacket) << ServerIDToClientID(CreateId) << byDirection << pos.shX << pos.shY << chHP;
+	(*pPacket) << dwCreateId << MOVE_DIR_TO_BYTE(viewDir) << pos.shX << pos.shY << chHP;
+}
+
+void MAKE_SC_DELETE_CHARACTER(DWORD dwDeleteId, Packet* pPacket)
+{
+	MAKE_HEADER(dfPACKET_SC_DELETE_CHARACTER, pPacket);
+	(*pPacket) << dwDeleteId;
+}
+
+void MAKE_SC_MOVE_START(DWORD dwStartId, MOVE_DIR moveDir, Pos pos, Packet* pPacket)
+{
+	MAKE_HEADER(dfPACKET_SC_MOVE_START, pPacket);
+	(*pPacket) << dwStartId << MOVE_DIR_TO_BYTE(moveDir) << pos.shX << pos.shY;
+}
+
+void MAKE_SC_SYNC(DWORD dwSyncId, Pos pos, Packet* pPacket)
+{
+	MAKE_HEADER(dfPACKET_SC_SYNC, pPacket);
+	(*pPacket) << dwSyncId << pos.shX << pos.shY;
 }

@@ -5,11 +5,12 @@
 #include "ID.h"
 struct st_Client
 {
+	ID SessionId;
+	SRWLOCK clientLock;
 	DWORD dwID;
-	ID id;
 	Pos pos;
-	BYTE byViewDir;
-	BYTE byMoveDir;
+	MOVE_DIR viewDir;
+	MOVE_DIR moveDir;
 	CHAR chHp;
 	SectorPos CurSector;
 	SectorPos OldSector;

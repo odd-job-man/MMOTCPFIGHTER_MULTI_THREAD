@@ -127,9 +127,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="CSCContents.cpp" />
     <ClCompile Include="GameServer.cpp" />
     <ClCompile Include="LanServer.cpp" />
     <ClCompile Include="LinkedList.cpp" />
+    <ClCompile Include="main.cpp" />
     <ClCompile Include="Packet.cpp" />
     <ClCompile Include="RingBuffer.cpp" />
     <ClCompile Include="SCCContents.cpp" />
@@ -140,6 +142,7 @@
   <ItemGroup>
     <ClInclude Include="Client.h" />
     <ClInclude Include="Constant.h" />
+    <ClInclude Include="CSCContents.h" />
     <ClInclude Include="Direction.h" />
     <ClInclude Include="FreeList.h" />
     <ClInclude Include="FreeListNode.h" />
@@ -149,6 +152,7 @@
     <ClInclude Include="LanServer.h" />
     <ClInclude Include="LinkedList.h" />
     <ClInclude Include="Logger.h" />
+    <ClInclude Include="MOVE_DIR.h" />
     <ClInclude Include="Packet.h" />
     <ClInclude Include="Position.h" />
     <ClInclude Include="RingBuffer.h" />

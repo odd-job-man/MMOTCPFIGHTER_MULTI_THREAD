@@ -26,7 +26,7 @@ ULONGLONG g_send = 0;
 unsigned __stdcall IOCPWorkerThread(LPVOID arg);
 unsigned __stdcall AcceptThread(LPVOID arg);
 
-ULONGLONG g_ullID;
+DWORD g_dwID;
 
 #define SERVERPORT 6000
 
@@ -240,9 +240,9 @@ unsigned __stdcall LanServer::AcceptThread(LPVOID arg)
 		pLanServer->DisconnectStack_.Pop((void**)&shIndex);
 		LeaveCriticalSection(&pLanServer->stackLock_);
 		Session* pSession = pLanServer->pSessionArr_ + shIndex;
-		pSession->Init(clientSock, g_ullID, shIndex);
+		pSession->Init(clientSock, g_dwID, shIndex);
 		CreateIoCompletionPort((HANDLE)pSession->sock, pLanServer->hcp_, (ULONG_PTR)pSession, 0);
-		++g_ullID;
+		++g_dwID;
 
 		InterlockedIncrement(&pSession->IoCnt);
 		pLanServer->OnAccept(pSession->id);
@@ -288,11 +288,6 @@ void LanServer::Monitoring()
 		"Send Msg TPS: %d\n"
 		"User Num : %d\n\n",
 		lAcceptTPS_, lDisconnectTPS_, lRecvTPS_, lSendTPS_, lSessionNum_);
-
-#ifdef _DEBUG
-	if (!lSessionNum_)
-		_CrtDumpMemoryLeaks();
-#endif
 
 	lAcceptTPS_ = lDisconnectTPS_ = lRecvTPS_ = lSendTPS_ = 0;
 }
@@ -342,7 +337,7 @@ void LanServer::SendPacket(ID id, Packet* pPacket)
 	Session* pSession = pSessionArr_ + GET_SESSION_INDEX(id);
 	NET_HEADER* pNetHeader = (NET_HEADER*)pPacket->pBuffer_;
 	pNetHeader->byCode = (BYTE)0x89;
-	pNetHeader->byLen = pPacket->GetUsedDataSize();
+	pNetHeader->byLen = pPacket->GetUsedDataSize() - 1;
 	pSession->sendRB.Enqueue((const char*)&pPacket, sizeof(pPacket));
 	SendPost(pSession);
 }
@@ -468,20 +463,23 @@ void LanServer::RecvProc(Session* pSession, DWORD dwNumberOfByteTransferred)
 #ifdef SENDRECV
 	LOG(L"DEBUG", DEBUG, TEXTFILE, L"Thread ID : %u, Recv Complete Session ID : %llu", GetCurrentThreadId(), pSession->id.ullId);
 #endif
-	SHORT shHeader;
+	NET_HEADER header;
 	Packet* pPacket = Packet::Alloc();
 	pSession->recvRB.MoveInPos(dwNumberOfByteTransferred);
 	while (1)
 	{
-		if (pSession->recvRB.Peek((char*)&shHeader, sizeof(shHeader)) == 0)
+		if (pSession->recvRB.Peek((char*)&header, sizeof(header)) == 0)
 			break;
 
-		if (pSession->recvRB.GetUseSize() < sizeof(shHeader) + shHeader)
+		if (header.byCode != 0x89)
+			__debugbreak();
+
+		if (pSession->recvRB.GetUseSize() < sizeof(header) + header.byLen + sizeof(BYTE))
 			break;
 
-		pSession->recvRB.Dequeue(pPacket->GetBufferPtr(), sizeof(shHeader) + shHeader);
-		pPacket->MoveWritePos(sizeof(shHeader) + shHeader);
-		pPacket->MoveReadPos(sizeof(shHeader));
+		pSession->recvRB.MoveOutPos(sizeof(header));
+		pSession->recvRB.Dequeue(pPacket->GetBufferPtr(), header.byLen + sizeof(BYTE));
+		pPacket->MoveWritePos(header.byLen + sizeof(BYTE));
 		OnRecv(pSession->id, pPacket);
 		pPacket->Clear();
 		InterlockedIncrement(&lRecvTPS_);

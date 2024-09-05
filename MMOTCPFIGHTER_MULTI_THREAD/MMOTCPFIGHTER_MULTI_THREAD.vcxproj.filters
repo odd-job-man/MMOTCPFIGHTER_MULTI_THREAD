@@ -27,9 +27,6 @@
     <ClCompile Include="Session.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="Stack.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
     <ClCompile Include="GameServer.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
@@ -40,6 +37,15 @@
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="Sector.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="CSCContents.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="main.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="Stack.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>
@@ -96,6 +102,12 @@
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="SCCContents.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="CSCContents.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="MOVE_DIR.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
   </ItemGroup>

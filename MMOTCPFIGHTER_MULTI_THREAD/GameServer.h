@@ -5,5 +5,5 @@
 class GameServer : public LanServer
 {
 	void* OnAccept(ID id);
-	void OnRecv(ID id, Packet* pPacket);
+	void OnRecv(void* pClient, Packet* pPacket);
 };
