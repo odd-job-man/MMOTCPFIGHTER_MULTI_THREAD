@@ -21,10 +21,10 @@ public:
 	virtual void Stop();
 	static unsigned __stdcall AcceptThread(LPVOID arg);
 	static unsigned __stdcall IOCPWorkerThread(LPVOID arg);
+	Session* pSessionArr_;
 private:
 	LONG lSessionNum_ = 0;
 	LONG lMaxSession_;
-	Session* pSessionArr_;
 	Stack DisconnectStack_;
 	CRITICAL_SECTION stackLock_;
 	HANDLE hcp_;

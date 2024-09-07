@@ -335,11 +335,14 @@ void LanServer::Stop()
 void LanServer::SendPacket(ID id, Packet* pPacket)
 {
 	Session* pSession = pSessionArr_ + GET_SESSION_INDEX(id);
-	NET_HEADER* pNetHeader = (NET_HEADER*)pPacket->pBuffer_;
-	pNetHeader->byCode = (BYTE)0x89;
-	pNetHeader->byLen = pPacket->GetUsedDataSize() - 1;
-	pSession->sendRB.Enqueue((const char*)&pPacket, sizeof(pPacket));
-	SendPost(pSession);
+	if (pSession->id.ullId == id.ullId && pSession->bUsing)
+	{
+		NET_HEADER* pNetHeader = (NET_HEADER*)pPacket->pBuffer_;
+		pNetHeader->byCode = (BYTE)0x89;
+		pNetHeader->byLen = pPacket->GetUsedDataSize() - 1;
+		pSession->sendRB.Enqueue((const char*)&pPacket, sizeof(pPacket));
+		SendPost(pSession);
+	}
 }
 
 BOOL LanServer::RecvPost(Session* pSession)

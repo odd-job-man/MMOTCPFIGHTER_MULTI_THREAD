@@ -19,9 +19,11 @@ void MAKE_SC_CREATE_MY_CHARACTER(DWORD dwDestId, MOVE_DIR viewDir, Pos pos, CHAR
 void MAKE_SC_CREATE_OTHER_CHARACTER(DWORD dwCreateId, MOVE_DIR viewDir, Pos pos, CHAR chHP, Packet* pPacket);
 void MAKE_SC_DELETE_CHARACTER(DWORD dwDeleteId, Packet* pPacket);
 void MAKE_SC_MOVE_START(DWORD dwStartId, MOVE_DIR moveDir, Pos pos, Packet* pPacket);
+void MAKE_SC_MOVE_STOP(DWORD dwStopId, MOVE_DIR viewDir, Pos pos, Packet* pPacket);
 void MAKE_SC_SYNC(DWORD dwSyncId, Pos pos, Packet* pPacket);
-DWORD MAKE_SC_MOVE_STOP(DWORD dwStopId, BYTE byViewDir, Pos pos, Packet* pPacket);
-DWORD MAKE_SC_ATTACK(DWORD dwAttackerId, BYTE byViewDir, Pos AttackerPos, DWORD dwAttackNum, Packet* pPacket);
-DWORD MAKE_SC_DAMAGE(DWORD dwAttackerId, DWORD dwVictimId, BYTE byVimctimHp, Packet* pPacket);
+void MAKE_SC_ATTACK1(DWORD dwAttackerId, MOVE_DIR viewDir, Pos AttackerPos, Packet* pPacket);
+void MAKE_SC_ATTACK2(DWORD dwAttackerId, MOVE_DIR viewDir, Pos AttackerPos, Packet* pPacket);
+void MAKE_SC_ATTACK3(DWORD dwAttackerId, MOVE_DIR viewDir, Pos AttackerPos, Packet* pPacket);
+void MAKE_SC_DAMAGE(DWORD dwAttackerId, DWORD dwVictimId, CHAR chVimctimHp, Packet* pPacket);
 void MAKE_SC_SYNC(DWORD dwSyncId, Pos pos, Packet* pPacket);
-DWORD MAKE_SC_ECHO(DWORD dwTime, Packet* pPacket);
+void MAKE_SC_ECHO(DWORD dwTime, Packet* pPacket);

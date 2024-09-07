@@ -1,5 +1,4 @@
 #pragma once
-#pragma once
 #include "Client.h"
 #include <cstddef>
 #include "Position.h"
@@ -145,9 +144,29 @@ static __forceinline BOOL IsValidPos(Pos pos)
 }
 #pragma optimize("",off)
 
-// 제거된 섹터를 얻을때는 BaseSector에 OldSector대입
-// 새로운 섹터를 얻을때는 BaseSector에 NewSector대입
-void GetNewSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, BYTE byDeltaSectorNum, SectorPos nextSector);
+__forceinline void LockShared(st_SECTOR_AROUND* pSectorAround)
+{
+	for (BYTE i = 0; i < pSectorAround->byCount; ++i)
+		AcquireSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+}
+
+__forceinline void UnLockShared(st_SECTOR_AROUND* pSectorAround)
+{
+	for (int i = (int)(pSectorAround->byCount) - 1; i >= 0; --i)
+		ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+}
+
+__forceinline void AcquireSectorAroundExclusive(st_SECTOR_AROUND* pSectorAround)
+{
+	for (BYTE i = 0; i < pSectorAround->byCount; ++i)
+		AcquireSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+}
+
+__forceinline void ReleaseSectorAroundExclusive(st_SECTOR_AROUND* pSectorAround)
+{
+	for (int i = (int)(pSectorAround->byCount) - 1; i >= 0; --i)
+		ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+}
 
 __forceinline void GetValidClientFromSector(SectorPos sectorPos, AroundInfo* pAroundInfo, int* pNum, st_Client* pExcept)
 {
@@ -176,7 +195,7 @@ __forceinline void GetValidClientFromSector(SectorPos sectorPos, AroundInfo* pAr
 	}
 }
 
-void GetSectorAround(SectorPos CurSector, st_SECTOR_AROUND* pOutSectorAround);
+void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector);
 
 
 #pragma optimize("",on)
@@ -189,39 +208,8 @@ __forceinline SectorPos CalcSector(Pos pos)
 }
 #pragma optimize("",off)
 
-inline void GetSectorAround(SHORT shPosY, SHORT shPosX, st_SECTOR_AROUND* pOutSectorAround)
-{
-	int iSectorY;
-	int iSectorX;
-	int iAroundSectorY;
-	int iAroundSectorX;
-	SHORT* pCount;
-
-	iSectorY = shPosY / df_SECTOR_HEIGHT;
-	iSectorX = shPosX / df_SECTOR_WIDTH;
-	pCount = (SHORT*)((char*)pOutSectorAround + offsetof(st_SECTOR_AROUND, byCount));
-	*pCount = 0;
-
-
-	for (int dy = -1; dy <= 1; ++dy)
-	{
-		for (int dx = -1; dx <= 1; ++dx)
-		{
-			iAroundSectorY = iSectorY + dy;
-			iAroundSectorX = iSectorX + dx;
-			if (IsValidSector(iAroundSectorY, iAroundSectorX))
-			{
-				pOutSectorAround->Around[*pCount].shY = iAroundSectorY;
-				pOutSectorAround->Around[*pCount].shX = iAroundSectorX;
-				++(*pCount);
-			}
-		}
-	}
-}
-void GetNewSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, LockInfo* pOutLockInfo, SectorPos nextSector);
-void GetRemoveSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, LockInfo* pOutLockInfo, BYTE byDeltaSectorNum, SectorPos nextSector);
-void LockAroundSectorShared(SectorPos sector);
-void UnLockAroundSectorShared(SectorPos sector);
+void GetNewSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos nextSector);
+void GetRemoveSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos prevSector);
 void GetMoveLockInfo(LockInfo* pOutLockInfo, SectorPos prevSector, SectorPos afterSector);
 void AddClientAtSector(st_Client* pClient, SectorPos newSectorPos);
 void RemoveClientAtSector(st_Client* pClient, SectorPos oldSectorPos);
