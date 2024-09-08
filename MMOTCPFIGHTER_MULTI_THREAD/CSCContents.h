@@ -16,11 +16,11 @@ enum PACKET_TYPE : BYTE
 	dfPACKET_CS_ECHO = 252,
 };
 
-BOOL CS_MOVE_START(st_Client* pClient, MOVE_DIR moveDir, Pos clientPos);
-BOOL CS_MOVE_STOP(st_Client* pClient, MOVE_DIR viewDir, Pos clientPos);
-BOOL CS_ATTACK1(st_Client* pClient, MOVE_DIR viewDir, Pos clientPos);
-BOOL CS_ATTACK2(st_Client* pClient, MOVE_DIR viewDir, Pos ClientPos);
-BOOL CS_ATTACK3(st_Client* pClient, MOVE_DIR viewDir, Pos ClientPos);
+BOOL CS_MOVE_START(st_Client* pPlayer, MOVE_DIR moveDir, Pos clientPos);
+BOOL CS_MOVE_STOP(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos);
+BOOL CS_ATTACK1(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos);
+BOOL CS_ATTACK2(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos);
+BOOL CS_ATTACK3(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos);
 BOOL CS_ECHO(st_Client* pClient, DWORD dwTime);
 
 BOOL PacketProc(void* pClient, BYTE byPacketType);

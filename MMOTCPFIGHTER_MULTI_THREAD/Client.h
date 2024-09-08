@@ -7,7 +7,7 @@
 struct st_Client
 {
 	ID SessionId;
-	SRWLOCK clientLock;
+	SRWLOCK playerLock;
 	DWORD dwID;
 	Pos pos;
 	MOVE_DIR viewDir;
@@ -20,7 +20,7 @@ struct st_Client
 #pragma warning(disable : 26495)
 	st_Client()
 	{
-		InitializeSRWLock(&clientLock);
+		InitializeSRWLock(&playerLock);
 	}
 #pragma warning(default : 26495)
 

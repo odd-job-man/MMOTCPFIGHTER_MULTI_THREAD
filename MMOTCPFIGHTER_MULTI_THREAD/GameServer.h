@@ -1,30 +1,35 @@
 #pragma once
-#include "IHandler.h"
-#include "LanServer.h"
-
-class GameServer : public LanServer
+class GameServer : public IHandler
 {
-	void* OnAccept(ID id);
-	void OnRecv(void* pClient, Packet* pPacket);
-	void OnRelease(void* pClient);
-	BOOL IsNetworkStateInvalid(ID SessionId);
-	int GetAllValidClient(void** ppOutClientArr);
 public:
-	void Update();
-};
+	BOOL Start(DWORD dwMaxSession);
+	void SendPacket(ID id, Packet* pPacket);
+	virtual BOOL OnConnectionRequest();
+	virtual void* OnAccept(ID id);
+	virtual void OnRecv(void* pClient, Packet* pPacket);
+	virtual void OnRelease(void* pClient);
+	int GetAllValidClient(void** ppOutClientArr);
+	static unsigned __stdcall AcceptThread(LPVOID arg);
+	static unsigned __stdcall IOCPWorkerThread(LPVOID arg);
+	Session* pSessionArr_;
+	LONG lSessionNum_ = 0;
+	LONG lMaxSession_;
+	Stack DisconnectStack_;
+	CRITICAL_SECTION stackLock_;
+	HANDLE hcp_;
+	HANDLE hAcceptThread_;
+	HANDLE* hIOCPWorkerThreadArr_;
+	SOCKET hListenSock_;
+	BOOL RecvPost(Session* pSession);
+	BOOL SendPost(Session* pSession);
+	void ReleaseSession(Session* pSession);
+	void RecvProc(Session* pSession, DWORD dwNumberOfBytesTransferred);
+	void SendProc(Session* pSession, DWORD dwNumberOfBytesTransferred);
 
-//BOOL GetAllValidClient(DWORD* pOutUserNum, void** ppOutClientArr)
-//{
-//	DWORD dwClientNum = 0;
-//	for (DWORD i = 0; i < g_dwSessionNum; ++i)
-//	{
-//		if (g_pSessionArr[i]->IsValid == INVALID)
-//			continue;
-//
-//		ppOutClientArr[dwClientNum] = g_pSessionArr[i]->pClient;
-//		++dwClientNum;
-//	}
-//
-//	*pOutUserNum = dwClientNum;
-//	return TRUE;
-//}
+	// Monitoring º¯¼ö
+	// Accept
+	LONG lAcceptTPS_ = 0;
+
+	// Disconnect
+	LONG lDisconnectTPS_ = 0;
+};

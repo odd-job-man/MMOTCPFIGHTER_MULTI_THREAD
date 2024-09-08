@@ -44,14 +44,6 @@ struct st_DirVector
 	char byX;
 };
 
-union AroundInfo
-{
-	struct st_AroundClientInfo
-	{
-		DWORD dwNum;
-		st_Client* cArr[7800];
-	}CI;
-};
 
 
 
@@ -144,13 +136,13 @@ static __forceinline BOOL IsValidPos(Pos pos)
 }
 #pragma optimize("",off)
 
-__forceinline void LockShared(st_SECTOR_AROUND* pSectorAround)
+__forceinline void AcquireSectorAroundShared(st_SECTOR_AROUND* pSectorAround)
 {
 	for (BYTE i = 0; i < pSectorAround->byCount; ++i)
 		AcquireSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
 }
 
-__forceinline void UnLockShared(st_SECTOR_AROUND* pSectorAround)
+__forceinline void ReleaseSectorAroundShared(st_SECTOR_AROUND* pSectorAround)
 {
 	for (int i = (int)(pSectorAround->byCount) - 1; i >= 0; --i)
 		ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
@@ -166,33 +158,6 @@ __forceinline void ReleaseSectorAroundExclusive(st_SECTOR_AROUND* pSectorAround)
 {
 	for (int i = (int)(pSectorAround->byCount) - 1; i >= 0; --i)
 		ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
-}
-
-__forceinline void GetValidClientFromSector(SectorPos sectorPos, AroundInfo* pAroundInfo, int* pNum, st_Client* pExcept)
-{
-	LINKED_NODE* pCurLink;
-	st_SECTOR_CLIENT_INFO* pSCI;
-	st_Client* pClient;
-
-	pSCI = &(g_Sector[sectorPos.shY][sectorPos.shX]);
-	pCurLink = pSCI->pClientLinkHead;
-	for (DWORD i = 0; i < pSCI->dwNumOfClient; ++i)
-	{
-		pClient = LinkToClient(pCurLink);
-
-		// 함수이름앞에 Valid가 붙은 이유
-		//if (IsNetworkStateInValid(pClient->handle))
-		//	goto lb_next;
-
-		if (pClient == pExcept)
-			goto lb_next;
-
-		pAroundInfo->CI.cArr[*pNum] = pClient;
-		++(*pNum);
-
-	lb_next:
-		pCurLink = pCurLink->pNext;
-	}
 }
 
 void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector);
@@ -213,6 +178,4 @@ void GetRemoveSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos
 void GetMoveLockInfo(LockInfo* pOutLockInfo, SectorPos prevSector, SectorPos afterSector);
 void AddClientAtSector(st_Client* pClient, SectorPos newSectorPos);
 void RemoveClientAtSector(st_Client* pClient, SectorPos oldSectorPos);
-AroundInfo* GetAroundValidClient(SectorPos sp, st_Client* pExcept);
-AroundInfo* GetDeltaValidClient(BYTE byBaseDir, BYTE byDeltaSectorNum, SectorPos SectorBasePos);
-void SectorUpdateAndNotify(st_Client* pClient, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove);
+void SectorUpdateAndNotify(st_Client* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove);

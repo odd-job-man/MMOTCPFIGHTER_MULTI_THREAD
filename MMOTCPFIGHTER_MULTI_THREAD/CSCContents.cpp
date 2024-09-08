@@ -1,11 +1,14 @@
 #include <WinSock2.h>
 #include <windows.h>
+#include "Session.h"
 #include "Direction.h"
 #include "CSCContents.h"
 #include "SCCContents.h"
 #include "Sector.h"
 #include "Stack.h"
+#include "IHandler.h"
 #include "GameServer.h"
+#include <stdio.h>
 extern GameServer g_GameServer;
 
 __forceinline BOOL IsRRColide(Pos AttackerPos, Pos VictimPos, SHORT shAttackRangeY, SHORT shAttackRangeX)
@@ -26,25 +29,44 @@ __forceinline BOOL IsLLColide(Pos AttackerPos, Pos VictimPos, SHORT shAttackRang
 	return IsXCollide && IsYCollide;
 }
 
-__forceinline void SyncProc(st_Client* pSyncClient, SectorPos recvSector)
+__forceinline void SyncProc(st_Client* pSyncPlayer, SectorPos recvSector)
 {
 	st_SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, recvSector);
-	LockShared(&sectorAround);
+	AcquireSectorAroundShared(&sectorAround);
 	for (BYTE i = 0; i < sectorAround.byCount; ++i)
 	{
 		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[sectorAround.Around[i].shY][sectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
 		for (DWORD i = 0; i < pSCI->dwNumOfClient; ++i)
 		{
-			st_Client* pOtherClient = LinkToClient(pLink);
+			// 서버 기준으로 원래 거기잇던 원주민 and 싱크 당사자에게도 보내야하며 이 과정에서 SessionId만 필요해서 락을 걸지 않앗음
+			st_Client* pAncient = LinkToClient(pLink);
 			Packet* pSyncPacket = Packet::Alloc();
-			MAKE_SC_SYNC(pSyncClient->dwID, pSyncClient->pos, pSyncPacket);
-			g_GameServer.SendPacket(pOtherClient->SessionId, pSyncPacket);
+			MAKE_SC_SYNC(pSyncPlayer->dwID, pSyncPlayer->pos, pSyncPacket);
+			g_GameServer.SendPacket(pAncient->SessionId, pSyncPacket);
 			pLink = pLink->pNext;
 		}
 	}
-	UnLockShared(&sectorAround);
+	ReleaseSectorAroundShared(&sectorAround);
+}
+
+// 움직이기 시작한 플레이어 시선처리
+__forceinline void ProcessPlayerViewDir(st_Client* pMoveStartPlayer, MOVE_DIR moveDir)
+{
+	switch (moveDir)
+	{
+	case MOVE_DIR_RU:
+	case MOVE_DIR_RR:
+	case MOVE_DIR_RD:
+		pMoveStartPlayer->viewDir = MOVE_DIR_RR;
+		break;
+	case MOVE_DIR_LL:
+	case MOVE_DIR_LU:
+	case MOVE_DIR_LD:
+		pMoveStartPlayer->viewDir = MOVE_DIR_LL;
+		break;
+	}
 }
 
 void FindSectorInAttackRange(Pos pos, MOVE_DIR viewDir, SHORT shAttackRangeY, SHORT shAttackRangeX, st_SECTOR_AROUND* pSectorAround)
@@ -186,33 +208,31 @@ void FindSectorInAttackRange(Pos pos, MOVE_DIR viewDir, SHORT shAttackRangeY, SH
 	pSectorAround->byCount = iCount;
 }
 
-st_Client* HandleCollision(st_Client* pAttacker, SHORT shAttackRangeY, SHORT shAttackRangeX, st_SECTOR_AROUND* pSectorAround)
+// 피격시 락을 풀지 않는 이유는 그 사이에 OnRelease로 인해서 없어지거나 혹은 그로인해 다른 클라로 바뀌는것을 막기 위함이다.
+st_Client* HandleCollision_AND_ACQUIRE_EXCLUSIVE_ON_HIT(st_Client* pAttacker, SHORT shAttackRangeY, SHORT shAttackRangeX, st_SECTOR_AROUND* pSectorAround)
 {
-	st_Client* pVictim = nullptr;
-
 	if (pAttacker->viewDir == MOVE_DIR_LL)
 	{
 		for (int i = 0; i < pSectorAround->byCount; ++i)
 		{
 			st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX];
 			LINKED_NODE* pLink = pSCI->pClientLinkHead;
-			for (DWORD i = 0; i < pSCI->dwNumOfClient; ++i)
+			for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
 			{
-				st_Client* pOtherClient = LinkToClient(pLink);
+				st_Client* pHitCandidate = LinkToClient(pLink);
 
-				// 공격자 본인은 빼고 보내야한다
-				if (pOtherClient == pAttacker)
-					continue;
-
-				AcquireSRWLockShared(&pOtherClient->clientLock);
-				if (IsLLColide(pAttacker->pos, pOtherClient->pos, shAttackRangeY, shAttackRangeX))
+				if (pHitCandidate == pAttacker)
 				{
-					pVictim = pOtherClient;
-					ReleaseSRWLockShared(&pOtherClient->clientLock);
-					return pVictim;
+					pLink = pLink->pNext;
+					continue;
 				}
-				ReleaseSRWLockShared(&pOtherClient->clientLock);
+
+				AcquireSRWLockExclusive(&pHitCandidate->playerLock);
+				if (IsLLColide(pAttacker->pos, pHitCandidate->pos, shAttackRangeY, shAttackRangeX))
+					return pHitCandidate;
+
 				pLink = pLink->pNext;
+				ReleaseSRWLockExclusive(&pHitCandidate->playerLock);
 			}
 		}
 	}
@@ -222,60 +242,51 @@ st_Client* HandleCollision(st_Client* pAttacker, SHORT shAttackRangeY, SHORT shA
 		{
 			st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX];
 			LINKED_NODE* pLink = pSCI->pClientLinkHead;
-			for (DWORD i = 0; i < pSCI->dwNumOfClient; ++i)
+			for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
 			{
-				st_Client* pOtherClient = LinkToClient(pLink);
+				st_Client* pHitCandidate = LinkToClient(pLink);
 
 				// 공격자 본인은 빼고 보내야한다
-				if (pOtherClient == pAttacker)
-					continue;
-
-				AcquireSRWLockShared(&pOtherClient->clientLock);
-				if (IsRRColide(pAttacker->pos, pOtherClient->pos, shAttackRangeY, shAttackRangeX))
+				if (pHitCandidate == pAttacker)
 				{
-					pVictim = pOtherClient;
-					ReleaseSRWLockShared(&pOtherClient->clientLock);
-					return pVictim;
+					pLink = pLink->pNext;
+					continue;
 				}
-				ReleaseSRWLockShared(&pOtherClient->clientLock);
+
+				AcquireSRWLockExclusive(&pHitCandidate->playerLock);
+				if (IsRRColide(pAttacker->pos, pHitCandidate->pos, shAttackRangeY, shAttackRangeX))
+					return pHitCandidate;
+
 				pLink = pLink->pNext;
+				ReleaseSRWLockExclusive(&pHitCandidate->playerLock);
 			}
 		}
 	}
 	return nullptr;
 }
 
-BOOL CS_MOVE_START(st_Client* pClient, MOVE_DIR moveDir, Pos clientPos)
+BOOL CS_MOVE_START(st_Client* pPlayer, MOVE_DIR moveDir, Pos clientPos)
 {
-	AcquireSRWLockExclusive(&pClient->clientLock);
-	SectorPos oldSector = CalcSector(pClient->pos);
+	AcquireSRWLockExclusive(&pPlayer->playerLock);
+	//printf("CS_MOVE_START! ThreadID : %u (%d, %d)\n", GetCurrentThreadId(), clientPos.shX, clientPos.shY);
+	SectorPos oldSector = CalcSector(pPlayer->pos);
 
 	// 클라이언트 시선처리
-	switch (moveDir)
-	{
-	case MOVE_DIR_RU:
-	case MOVE_DIR_RR:
-	case MOVE_DIR_RD:
-		pClient->viewDir = MOVE_DIR_RR;
-		break;
-	case MOVE_DIR_LL:
-	case MOVE_DIR_LU:
-	case MOVE_DIR_LD:
-		pClient->viewDir = MOVE_DIR_LL;
-		break;
-	}
+	ProcessPlayerViewDir(pPlayer, moveDir);
+	pPlayer->moveDir = moveDir;
 
 	// 이동중에 방향을 바꿔서 STOP이 오지않고 또 다시 START가 왓는데, 이때 서버 프레임이 떨어져서 싱크가 발생하는 경우.
 	// 기존 서버 좌표 기준으로 근방 섹터에 SYNC메시지를 날려야하며 따라서 그 서버좌표 근방섹터에 전부 락을잡는다
-	if (IsSync(pClient->pos, clientPos))
+	if (IsSync(pPlayer->pos, clientPos))
 	{
-		SyncProc(pClient, oldSector);
-		clientPos = pClient->pos;
+		//printf("Sync! ThreadID : %u\n", GetCurrentThreadId());
+		SyncProc(pPlayer, oldSector);
+		clientPos = pPlayer->pos;
 	}
 	else
 	{
 		// 싱크가 아니므로 이제부터 클라 좌표를 믿는다
-		pClient->pos = clientPos;
+		pPlayer->pos = clientPos;
 	}
 
 
@@ -285,9 +296,10 @@ BOOL CS_MOVE_START(st_Client* pClient, MOVE_DIR moveDir, Pos clientPos)
 	// dfERROR_RANGE보다 오차가 작지만, 섹터가 틀려서 섹터를 클라기준으로 맞출경우 업데이트 
 	if (!IsSameSector(oldSector, newSector))
 	{
-		MOVE_DIR bySectorMoveDir = GetSectorMoveDir(oldSector, newSector);
+		//printf("CS_MOVE_START! ThreadID : %u SectorMOVE (%d,%d) -> (%d,%d)\n", GetCurrentThreadId(), oldSector.shX, oldSector.shY, newSector.shX, newSector.shY);
+		MOVE_DIR sectorMoveDir = GetSectorMoveDir(oldSector, newSector);
 		// 어차피 곧 움직인다고 보낼거기에 지금은 움직인다고 알릴필요 없다.
-		SectorUpdateAndNotify(pClient, bySectorMoveDir, oldSector, newSector, FALSE);
+		SectorUpdateAndNotify(pPlayer, sectorMoveDir, oldSector, newSector, FALSE);
 	}
 
 	// 같은 섹터라면 현재 위치한 섹터에 내가 움직이기 시작한다고 패킷을 보내야한다.
@@ -295,51 +307,61 @@ BOOL CS_MOVE_START(st_Client* pClient, MOVE_DIR moveDir, Pos clientPos)
 	// 전부 SC_MOVE_START 패킷 쏜 뒤 락풀고 리턴
 	st_SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, newSector);
-	LockShared(&sectorAround);
+	AcquireSectorAroundShared(&sectorAround);
 	for (BYTE i = 0; i < sectorAround.byCount; ++i)
 	{
 		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[sectorAround.Around[i].shY][sectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
-		for (DWORD i = 0; i < pSCI->dwNumOfClient; ++i)
+		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
 		{
-			st_Client* pOtherClient = LinkToClient(pLink);
-			Packet* pMoveStartPacket = Packet::Alloc();
-			MAKE_SC_MOVE_START(pClient->dwID, pClient->moveDir, clientPos, pMoveStartPacket);
-			g_GameServer.SendPacket(pClient->SessionId, pMoveStartPacket);
+			st_Client* pAncient = LinkToClient(pLink);
+			// 나 자신에게는 START를 안보내야함, 이거 if문 위치때문에 메모리 릭 날뻔함
+			if (pAncient == pPlayer)
+			{
+				pLink = pLink->pNext;
+				continue;
+			}
+
+			Packet* pSC_MOVE_START = Packet::Alloc();
+			MAKE_SC_MOVE_START(pPlayer->dwID, pPlayer->moveDir, clientPos, pSC_MOVE_START);
+			g_GameServer.SendPacket(pAncient->SessionId, pSC_MOVE_START);
 			pLink = pLink->pNext;
 		}
 	}
-	UnLockShared(&sectorAround);
-	ReleaseSRWLockExclusive(&pClient->clientLock);
+	ReleaseSectorAroundShared(&sectorAround);
+	ReleaseSRWLockExclusive(&pPlayer->playerLock);
     return TRUE;
 }
 
-BOOL CS_MOVE_STOP(st_Client* pClient, MOVE_DIR viewDir, Pos clientPos)
+BOOL CS_MOVE_STOP(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos)
 {
-	AcquireSRWLockExclusive(&pClient->clientLock);
-	SectorPos oldSector = CalcSector(pClient->pos);
+	AcquireSRWLockExclusive(&pPlayer->playerLock);
+	//printf("CS_MOVE_STOP! ThreadID : %u (%d, %d)\n", GetCurrentThreadId(), playerPos.shX, playerPos.shY);
+	SectorPos oldSector = CalcSector(pPlayer->pos);
+	pPlayer->moveDir = MOVE_DIR_NOMOVE;
 
 	// START이후 시간이 흘러 Stop이 왓는데, 그 사이에 서버 프레임이 떨어져서 싱크가 발생하는 경우.
-	if (IsSync(pClient->pos, clientPos))
+	if (IsSync(pPlayer->pos, playerPos))
 	{
-		SyncProc(pClient, oldSector);
-		clientPos = pClient->pos;
+		SyncProc(pPlayer, oldSector);
+		playerPos = pPlayer->pos;
 	}
 	else
 	{
 		// 싱크가 아니므로 이제부터 클라 좌표를 믿는다
-		pClient->pos = clientPos;
+		pPlayer->pos = playerPos;
 	}
 
-	SectorPos newSector = CalcSector(clientPos);
+	SectorPos newSector = CalcSector(playerPos);
 
 	// IsSync가 참이엇다면 이시점에서 oldSector == newSector라서 if문 안거침
 	// dfERROR_RANGE보다 오차가 작지만, 섹터가 틀려서 섹터를 클라기준으로 맞출경우 업데이트 
 	if (!IsSameSector(oldSector, newSector))
 	{
+		//printf("CS_MOVE_STOP! ThreadID : %u SectorMOVE (%d,%d) -> (%d,%d)\n", GetCurrentThreadId(), oldSector.shX, oldSector.shY, newSector.shX, newSector.shY);
 		MOVE_DIR bySectorMoveDir = GetSectorMoveDir(oldSector, newSector);
 		// 아직 움직이기 때문에 새로 보이는 애들한테 움직인다고 보내야 아래에서 다시 Stop 패킷을 보내는게 말이된다
-		SectorUpdateAndNotify(pClient, bySectorMoveDir, oldSector, newSector, TRUE);
+		SectorUpdateAndNotify(pPlayer, bySectorMoveDir, oldSector, newSector, TRUE);
 	}
 
 	// 같은 섹터라면 현재 위치한 섹터에 내가 움직이기 시작한다고 패킷을 보내야한다.
@@ -347,22 +369,29 @@ BOOL CS_MOVE_STOP(st_Client* pClient, MOVE_DIR viewDir, Pos clientPos)
 	// 전부 SC_MOVE_STOP 패킷 쏜 뒤 락풀고 리턴
 	st_SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, newSector);
-	LockShared(&sectorAround);
+	AcquireSectorAroundShared(&sectorAround);
 	for (BYTE i = 0; i < sectorAround.byCount; ++i)
 	{
 		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[sectorAround.Around[i].shY][sectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
-		for (DWORD i = 0; i < pSCI->dwNumOfClient; ++i)
+		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
 		{
-			st_Client* pOtherClient = LinkToClient(pLink);
-			Packet* pMoveStopPacket = Packet::Alloc();
-			MAKE_SC_MOVE_STOP(pClient->dwID, pClient->viewDir, clientPos, pMoveStopPacket);
-			g_GameServer.SendPacket(pClient->SessionId, pMoveStopPacket);
+			st_Client* pAncient = LinkToClient(pLink);
+			// SC_MOVE_STOP은 당사자를 제외하고 수신해야한다
+			if (pAncient == pPlayer)
+			{
+				pLink = pLink->pNext;
+				continue;
+			}
+			// 원주민의 SessionId만 사용하기에 락을 걸지 않앗다
+			Packet* pSC_MOVE_STOP = Packet::Alloc();
+			MAKE_SC_MOVE_STOP(pPlayer->dwID, pPlayer->viewDir, playerPos, pSC_MOVE_STOP);
+			g_GameServer.SendPacket(pAncient->SessionId, pSC_MOVE_STOP);
 			pLink = pLink->pNext;
 		}
 	}
-	UnLockShared(&sectorAround);
-	ReleaseSRWLockExclusive(&pClient->clientLock);
+	ReleaseSectorAroundShared(&sectorAround);
+	ReleaseSRWLockExclusive(&pPlayer->playerLock);
     return TRUE;
 }
 
@@ -374,71 +403,206 @@ __forceinline void DamageProc(st_Client* pAttacker, st_Client* pVictim, st_SECTO
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
 		for (DWORD i = 0; i < pSCI->dwNumOfClient; ++i)
 		{
-			st_Client* pOtherClient = LinkToClient(pLink);
+			st_Client* pDamageViewer = LinkToClient(pLink);
 			Packet* pDamagePacket = Packet::Alloc();
 			MAKE_SC_DAMAGE(pAttacker->dwID, pVictim->dwID, pVictim->chHp, pDamagePacket);
 
-			AcquireSRWLockShared(&pOtherClient->clientLock);
-			g_GameServer.SendPacket(pOtherClient->SessionId, pDamagePacket);
+			// 이미 섹터에 락이 걸려잇으며,x,y,hp,movedir,viewdir,등의 정보가 필요 없기 때문에 DamageView에 락을걸지 않음
+			g_GameServer.SendPacket(pDamageViewer->SessionId, pDamagePacket);
 			pLink = pLink->pNext;
-			ReleaseSRWLockShared(&pOtherClient->clientLock);
 		}
 	}
 }
 
-BOOL CS_ATTACK1(st_Client* pClient, MOVE_DIR viewDir, Pos clientPos)
+BOOL CS_ATTACK1(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos)
 {
-	AcquireSRWLockShared(&pClient->clientLock);
+	AcquireSRWLockShared(&pPlayer->playerLock);
 
-	SectorPos curSector = CalcSector(clientPos);
-	st_SECTOR_AROUND sectorAround;
-	GetSectorAround(&sectorAround, curSector);
-	LockShared(&sectorAround);
+	// 피격판정시 데미지 패킷을 보낼 섹터를 구해서 락을 건다
+	st_SECTOR_AROUND attackSectorAround;
+	GetSectorAround(&attackSectorAround, CalcSector(playerPos));
+	AcquireSectorAroundShared(&attackSectorAround);
 
-	for (BYTE i = 0; i < sectorAround.byCount; ++i)
+	// 공격모션을 위해 SC_ATTACK을 주변 9개의 섹터에서 자신을 제외한 플레이어들에게 보내야한다
+	for (BYTE i = 0; i < attackSectorAround.byCount; ++i)
 	{
-		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[sectorAround.Around[i].shY][sectorAround.Around[i].shX];
+		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[attackSectorAround.Around[i].shY][attackSectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
-		for (DWORD i = 0; i < pSCI->dwNumOfClient; ++i)
+		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
 		{
-			st_Client* pOtherClient = LinkToClient(pLink);
-			Packet* pAttack1Packet = Packet::Alloc();
+			st_Client* pAttackViewer = LinkToClient(pLink);
 
 			// 공격자 본인은 빼고 보내야한다
-			if (pOtherClient == pClient)
+			if (pAttackViewer == pPlayer)
+			{
+				pLink = pLink->pNext;
 				continue;
+			}
 
-			MAKE_SC_ATTACK1(pClient->dwID, pClient->viewDir, pClient->pos, pAttack1Packet);
-			AcquireSRWLockShared(&pOtherClient->clientLock);
-			g_GameServer.SendPacket(pOtherClient->SessionId, pAttack1Packet);
+			// 그냥 AttackViewer의 SessionID만 필요해서 락을 걸지 않았음.
+			Packet* pSC_ATTACK1 = Packet::Alloc();
+			MAKE_SC_ATTACK1(pPlayer->dwID, pPlayer->viewDir, pPlayer->pos, pSC_ATTACK1);
+			g_GameServer.SendPacket(pAttackViewer->SessionId, pSC_ATTACK1);
 			pLink = pLink->pNext;
-			ReleaseSRWLockShared(&pOtherClient->clientLock);
 		}
 	}
 
+	// collisionSectorAround는 AttackSectorAround의 부분집합이어야하며 락을 거는데 쓰는게아니라 피격판정을 위해 섹터의 플레이어리스트를 순회하는곳에만 사용한다
 	st_SECTOR_AROUND collisionSectorAround;
-	FindSectorInAttackRange(clientPos, viewDir, dfATTACK1_RANGE_Y, dfATTACK1_RANGE_X, &collisionSectorAround);
-	st_Client* pVictim = HandleCollision(pClient, dfATTACK1_RANGE_Y, dfATTACK1_RANGE_X, &collisionSectorAround);
+	FindSectorInAttackRange(playerPos, viewDir, dfATTACK1_RANGE_Y, dfATTACK1_RANGE_X, &collisionSectorAround);
+	st_Client* pVictim = HandleCollision_AND_ACQUIRE_EXCLUSIVE_ON_HIT(pPlayer, dfATTACK1_RANGE_Y, dfATTACK1_RANGE_X, &collisionSectorAround);
+	ReleaseSectorAroundShared(&attackSectorAround);
 
 	if (!pVictim)
 	{
-		UnLockShared(&sectorAround);
-		ReleaseSRWLockShared(&pClient->clientLock);
+		ReleaseSRWLockShared(&pPlayer->playerLock);
 		return FALSE;
 	}
 
-	pVictim->chHp -= dfATTACK1_DAMAGE;
-	DamageProc(pClient, pVictim, &sectorAround);
+	// 이 시점에서 피격자는 EXCLUSIVE로 락이 걸려잇으니 Release될 위험이 없으며 Update에 의해 움직여지지 않는다.
 
-	UnLockShared(&sectorAround);
-	ReleaseSRWLockShared(&pClient->clientLock);
+	// SC_DAMAGE 날릴 섹터 구하기
+	st_SECTOR_AROUND damageSectorAround;
+	GetSectorAround(&damageSectorAround, CalcSector(pVictim->pos));
+
+	// SC_DAMAGE날릴 섹터락 SHARED로 따고 피깎고 데미지패킷 보내고, 섹터락 풀고, 피격자 Exclusive락 풀고, 반환
+	AcquireSectorAroundShared(&damageSectorAround);
+	pVictim->chHp -= dfATTACK1_DAMAGE;
+	DamageProc(pPlayer, pVictim, &damageSectorAround);
+	ReleaseSectorAroundShared(&damageSectorAround);
+	ReleaseSRWLockExclusive(&pVictim->playerLock);
+	ReleaseSRWLockShared(&pPlayer->playerLock);
 	return TRUE;
 }
 
-BOOL CS_ATTACK2(st_Client* pClient, MOVE_DIR viewDir, Pos ClientPos)
+BOOL CS_ATTACK2(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos)
 {
-	AcquireSRWLockShared(&pClient->clientLock);
-	ReleaseSRWLockShared(&pClient->clientLock);
+	AcquireSRWLockShared(&pPlayer->playerLock);
+
+	// 피격판정시 데미지 패킷을 보낼 섹터를 구해서 락을 건다
+	st_SECTOR_AROUND attackSectorAround;
+	GetSectorAround(&attackSectorAround, CalcSector(playerPos));
+	AcquireSectorAroundShared(&attackSectorAround);
+
+	// 공격모션을 위해 SC_ATTACK을 주변 9개의 섹터에서 자신을 제외한 플레이어들에게 보내야한다
+	for (BYTE i = 0; i < attackSectorAround.byCount; ++i)
+	{
+		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[attackSectorAround.Around[i].shY][attackSectorAround.Around[i].shX];
+		LINKED_NODE* pLink = pSCI->pClientLinkHead;
+		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
+		{
+			st_Client* pAttackViewer = LinkToClient(pLink);
+
+			// 공격자 본인은 빼고 보내야한다
+			if (pAttackViewer == pPlayer)
+			{
+				pLink = pLink->pNext;
+				continue;
+			}
+
+			// 그냥 AttackViewer의 SessionID만 필요해서 락을 걸지 않았음.
+			Packet* pSC_ATTACK2 = Packet::Alloc();
+			MAKE_SC_ATTACK2(pPlayer->dwID, pPlayer->viewDir, pPlayer->pos, pSC_ATTACK2);
+			g_GameServer.SendPacket(pAttackViewer->SessionId, pSC_ATTACK2);
+			pLink = pLink->pNext;
+		}
+	}
+
+	// collisionSectorAround는 AttackSectorAround의 부분집합이어야하며 락을 거는데 쓰는게아니라 피격판정을 위해 섹터의 플레이어리스트를 순회하는곳에만 사용한다
+	st_SECTOR_AROUND collisionSectorAround;
+	FindSectorInAttackRange(playerPos, viewDir, dfATTACK2_RANGE_Y, dfATTACK2_RANGE_X, &collisionSectorAround);
+	st_Client* pVictim = HandleCollision_AND_ACQUIRE_EXCLUSIVE_ON_HIT(pPlayer, dfATTACK2_RANGE_Y, dfATTACK2_RANGE_X, &collisionSectorAround);
+	ReleaseSectorAroundShared(&attackSectorAround);
+
+	if (!pVictim)
+	{
+		ReleaseSRWLockShared(&pPlayer->playerLock);
+		return FALSE;
+	}
+
+	// 이 시점에서 피격자는 EXCLUSIVE로 락이 걸려잇으니 Release될 위험이 없으며 Update에 의해 움직여지지 않는다.
+	// SC_DAMAGE 날릴 섹터 구하기
+	st_SECTOR_AROUND damageSectorAround;
+	GetSectorAround(&damageSectorAround, CalcSector(pVictim->pos));
+
+	// SC_DAMAGE날릴 섹터락 SHARED로 따고 피깎고 데미지패킷 보내고, 섹터락 풀고, 피격자 Exclusive락 풀고, 반환
+	AcquireSectorAroundShared(&damageSectorAround);
+	pVictim->chHp -= dfATTACK2_DAMAGE;
+	DamageProc(pPlayer, pVictim, &damageSectorAround);
+	ReleaseSectorAroundShared(&damageSectorAround);
+	ReleaseSRWLockExclusive(&pVictim->playerLock);
+	ReleaseSRWLockShared(&pPlayer->playerLock);
+	return TRUE;
+}
+
+BOOL CS_ATTACK3(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos)
+{
+	AcquireSRWLockShared(&pPlayer->playerLock);
+
+	// 피격판정시 데미지 패킷을 보낼 섹터를 구해서 락을 건다
+	st_SECTOR_AROUND attackSectorAround;
+	GetSectorAround(&attackSectorAround, CalcSector(playerPos));
+	AcquireSectorAroundShared(&attackSectorAround);
+
+	// 공격모션을 위해 SC_ATTACK을 주변 9개의 섹터에서 자신을 제외한 플레이어들에게 보내야한다
+	for (BYTE i = 0; i < attackSectorAround.byCount; ++i)
+	{
+		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[attackSectorAround.Around[i].shY][attackSectorAround.Around[i].shX];
+		LINKED_NODE* pLink = pSCI->pClientLinkHead;
+		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
+		{
+			st_Client* pAttackViewer = LinkToClient(pLink);
+
+			// 공격자 본인은 빼고 보내야한다
+			if (pAttackViewer == pPlayer)
+			{
+				pLink = pLink->pNext;
+				continue;
+			}
+
+			// 그냥 AttackViewer의 SessionID만 필요해서 락을 걸지 않았음.
+			Packet* pSC_ATTACK3 = Packet::Alloc();
+			MAKE_SC_ATTACK3(pPlayer->dwID, pPlayer->viewDir, pPlayer->pos, pSC_ATTACK3);
+			g_GameServer.SendPacket(pAttackViewer->SessionId, pSC_ATTACK3);
+			pLink = pLink->pNext;
+		}
+	}
+
+	// collisionSectorAround는 AttackSectorAround의 부분집합이어야하며 락을 거는데 쓰는게아니라 피격판정을 위해 섹터의 플레이어리스트를 순회하는곳에만 사용한다
+	st_SECTOR_AROUND collisionSectorAround;
+	FindSectorInAttackRange(playerPos, viewDir, dfATTACK3_RANGE_Y, dfATTACK3_RANGE_X, &collisionSectorAround);
+	st_Client* pVictim = HandleCollision_AND_ACQUIRE_EXCLUSIVE_ON_HIT(pPlayer, dfATTACK3_RANGE_Y, dfATTACK3_RANGE_X, &collisionSectorAround);
+
+	ReleaseSectorAroundShared(&attackSectorAround);
+
+	if (!pVictim)
+	{
+		ReleaseSRWLockShared(&pPlayer->playerLock);
+		return FALSE;
+	}
+
+	// 이 시점에서 피격자는 EXCLUSIVE로 락이 걸려잇으니 Release될 위험이 없으며 Update에 의해 움직여지지 않는다.
+	// SC_DAMAGE 날릴 섹터 구하기
+	st_SECTOR_AROUND damageSectorAround;
+	GetSectorAround(&damageSectorAround, CalcSector(pVictim->pos));
+
+	// SC_DAMAGE날릴 섹터락 SHARED로 따고 피깎고 데미지패킷 보내고, 섹터락 풀고, 피격자 Exclusive락 풀고, 반환
+	AcquireSectorAroundShared(&damageSectorAround);
+	pVictim->chHp -= dfATTACK2_DAMAGE;
+	DamageProc(pPlayer, pVictim, &damageSectorAround);
+	ReleaseSectorAroundShared(&damageSectorAround);
+	ReleaseSRWLockExclusive(&pVictim->playerLock);
+	ReleaseSRWLockShared(&pPlayer->playerLock);
+	return TRUE;
+}
+
+
+
+BOOL CS_ECHO(st_Client* pClient, DWORD dwTime)
+{
+	Packet* pSC_ECHO = Packet::Alloc();
+	MAKE_SC_ECHO(dwTime, pSC_ECHO);
+	g_GameServer.SendPacket(pClient->SessionId, pSC_ECHO);
 	return TRUE;
 }
 

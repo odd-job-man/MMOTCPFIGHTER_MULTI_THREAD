@@ -22,7 +22,6 @@ public:
 	static unsigned __stdcall AcceptThread(LPVOID arg);
 	static unsigned __stdcall IOCPWorkerThread(LPVOID arg);
 	Session* pSessionArr_;
-private:
 	LONG lSessionNum_ = 0;
 	LONG lMaxSession_;
 	Stack DisconnectStack_;

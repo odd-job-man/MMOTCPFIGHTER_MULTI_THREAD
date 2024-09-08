@@ -2,15 +2,6 @@
 #include "RingBuffer.h"
 #include "ID.h"
 
-//#define IO_RET
-
-//#define GET_SESSION_INDEX(id) (id.ullId & 0xFFFF)
-//#define MAKE_SESSION_INDEX(Ret,ullId,index)\
-//do{\
-//Ret.ullId = ullId << 16;\
-//Ret.ullId ^= index;\
-//}while(0)\
-
 struct Session
 {
 	SOCKET sock;

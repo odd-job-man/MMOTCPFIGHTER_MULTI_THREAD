@@ -28,7 +28,7 @@ unsigned __stdcall AcceptThread(LPVOID arg);
 
 DWORD g_dwID;
 
-#define SERVERPORT 6000
+#define SERVERPORT 11402 
 
 #define ZERO_BYTE_SEND
 #define LINGER
@@ -128,7 +128,10 @@ BOOL LanServer::Start(DWORD dwMaxSession)
 	lMaxSession_ = dwMaxSession;
 	DisconnectStack_.Init(dwMaxSession, sizeof(SHORT));
 	for (int i = dwMaxSession - 1; i >= 0; --i)
+	{
 		DisconnectStack_.Push((void**)&i);
+		pSessionArr_[i].bUsing = FALSE;
+	}
 	InitializeCriticalSection(&stackLock_);
 
 	hAcceptThread_ = (HANDLE)_beginthreadex(NULL, 0, AcceptThread, this, 0, nullptr);
@@ -138,7 +141,7 @@ BOOL LanServer::Start(DWORD dwMaxSession)
 		__debugbreak();
 	}
 	LOG(L"ONOFF", SYSTEM, TEXTFILE, L"MAKE AccpetThread OK!");
-	return 0;
+	return TRUE;
 }
 
 __forceinline void ClearPacket(Session* pSession)

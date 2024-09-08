@@ -4,11 +4,11 @@
 #include "Packet.h"
 #include "SCCContents.h"
 #include "Stack.h"
+#include "IHandler.h"
 #include "GameServer.h"
 
 extern GameServer g_GameServer;
 
-AroundInfo g_AroundInfo;
 st_SECTOR_CLIENT_INFO g_Sector[dwNumOfSectorVertical][dwNumOfSectorHorizon];
 
 void GetMoveLockInfo(LockInfo* pLockInfo, SectorPos prevSector, SectorPos afterSector)
@@ -46,7 +46,7 @@ void InitSectionLock()
 {
 	for (DWORD i = 0; i < dwNumOfSectorVertical; ++i)
 	{
-		for (DWORD j = 0; j < dwNumOfSectorHorizon; ++i)
+		for (DWORD j = 0; j < dwNumOfSectorHorizon; ++j)
 		{
 			InitializeSRWLock(&g_Sector[i][j].srwSectionLock);
 		}
@@ -65,30 +65,14 @@ void RemoveClientAtSector(st_Client* pClient, SectorPos oldSectorPos)
 	--(g_Sector[oldSectorPos.shY][oldSectorPos.shX].dwNumOfClient);
 }
 
-AroundInfo* GetAroundValidClient(SectorPos sp, st_Client* pExcept)
-{
-	SectorPos temp;
-	int iNum = 0;
-	for (int i = 0; i < 9; ++i)
-	{
-		temp.shY = sp.shY + spArrDir[i].shY;
-		temp.shX = sp.shX + spArrDir[i].shX;
-		if (IsValidSector(temp))
-			GetValidClientFromSector(temp, &g_AroundInfo, &iNum, pExcept);
-	}
-	g_AroundInfo.CI.dwNum = iNum;
-	return &g_AroundInfo;
-}
-
 // 락 거는 순서
 // 영향권에서 없어진 섹터 -> 영향권에 들어오는 섹터 -> 섹터 옮기기위한 Exclusive 
 // 락 푸는 순서
 // 섹터 옮기기 위한 Exclusive -> 영향권에 들어오는 섹터 -> 영향권에서 없어진 섹터
-void SectorUpdateAndNotify(st_Client* pClient, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove)
+void SectorUpdateAndNotify(st_Client* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove)
 {
 	st_SECTOR_AROUND removeSectorAround;
-	MOVE_DIR oppositeDir = GetOppositeDir(sectorMoveDir);
-	GetRemoveSector(oppositeDir, &removeSectorAround, oldSectorPos);
+	GetRemoveSector(sectorMoveDir, &removeSectorAround, oldSectorPos);
 
 	st_SECTOR_AROUND newSectorAround;
 	GetNewSector(sectorMoveDir, &newSectorAround, newSectorPos);
@@ -97,77 +81,80 @@ void SectorUpdateAndNotify(st_Client* pClient, MOVE_DIR sectorMoveDir, SectorPos
 	GetMoveLockInfo(&lockInfo, oldSectorPos, newSectorPos);
 
 	// 락 걸기
-	LockShared(&removeSectorAround);
-	LockShared(&newSectorAround);
+	AcquireSectorAroundShared(&removeSectorAround);
+	AcquireSectorAroundShared(&newSectorAround);
 
-	AcquireSRWLockExclusive(&lockInfo.lockArr[0]);
-	AcquireSRWLockExclusive(&lockInfo.lockArr[1]);
-
+	// 시야에서 없어지는 섹터에는 pPlayer는 포함되지 않기에 pAncient == pPlayer에 대한 예외처리는 하지 않아도 된다.
 	for (BYTE i = 0; i < removeSectorAround.byCount; ++i)
 	{
 		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[removeSectorAround.Around[i].shY][removeSectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
 		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
 		{
-			// 없어지는 애가 다른애들한테 보내기
-			Packet* pSC_DELETE_CHARACTER_LEAVE_TO_ANCIENT = Packet::Alloc();
-			MAKE_SC_DELETE_CHARACTER(pClient->dwID, pSC_DELETE_CHARACTER_LEAVE_TO_ANCIENT);
-			st_Client* pRemovedClient = LinkToClient(pLink);
+			st_Client* pAncient = LinkToClient(pLink);
 
-			AcquireSRWLockShared(&pRemovedClient->clientLock);
-			g_GameServer.SendPacket(pRemovedClient->SessionId, pSC_DELETE_CHARACTER_LEAVE_TO_ANCIENT);
-			// 그자리에 있던 애들이 없어지는 애한테 보내기
+			// 떠나는 애가 원주민들한테 보내기
+			Packet* pSC_DELETE_CHARACTER_LEAVE_TO_ANCIENT = Packet::Alloc();
+			MAKE_SC_DELETE_CHARACTER(pPlayer->dwID, pSC_DELETE_CHARACTER_LEAVE_TO_ANCIENT);
+			g_GameServer.SendPacket(pAncient->SessionId, pSC_DELETE_CHARACTER_LEAVE_TO_ANCIENT);
+
+			// 원주민들이 떠나는 애한테 보내기
 			Packet* pSC_DELETE_CHARACTER_ANCIENT_TO_LEAVE = Packet::Alloc();
-			MAKE_SC_DELETE_CHARACTER(pRemovedClient->dwID, pSC_DELETE_CHARACTER_ANCIENT_TO_LEAVE);
-			g_GameServer.SendPacket(pClient->SessionId, pSC_DELETE_CHARACTER_ANCIENT_TO_LEAVE);
-			ReleaseSRWLockShared(&pRemovedClient->clientLock);
+			MAKE_SC_DELETE_CHARACTER(pAncient->dwID, pSC_DELETE_CHARACTER_ANCIENT_TO_LEAVE);
+			g_GameServer.SendPacket(pPlayer->SessionId, pSC_DELETE_CHARACTER_ANCIENT_TO_LEAVE);
 			pLink = pLink->pNext;
 		}
 	}
 
+	// 시야에서 들어오는 섹터에는 pPlayer는 포함되지 않기에 pAncient == pPlayer에 대한 예외처리는 하지 않아도 된다.
 	for (BYTE i = 0; i < newSectorAround.byCount; ++i)
 	{
 		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[newSectorAround.Around[i].shY][newSectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
 		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
 		{
+			st_Client* pAncient = LinkToClient(pLink);
+
+			// 만약 원주민이 움직이고 있다면 위치와 이동방향이 필요하고 이는 Update스레드가 수정 가능하기에 여기서는 락을 건다
+			AcquireSRWLockShared(&pAncient->playerLock);
 			// 생기는 애가 다른애들한테 나 생긴다고 보내기
 			Packet* pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT = Packet::Alloc();
-			MAKE_SC_CREATE_OTHER_CHARACTER(pClient->dwID, pClient->viewDir, pClient->pos, pClient->chHp, pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
-
-			st_Client* pAncientClient = LinkToClient(pLink);
-			AcquireSRWLockShared(&pAncientClient->clientLock);
-			g_GameServer.SendPacket(pAncientClient->SessionId, pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
+			MAKE_SC_CREATE_OTHER_CHARACTER(pPlayer->dwID, pPlayer->viewDir, pPlayer->pos, pPlayer->chHp, pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
+			g_GameServer.SendPacket(pAncient->SessionId, pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
 			if (IsMove)
 			{
 				Packet* pSC_MOVE_START_NEW_TO_ANCIENT = Packet::Alloc();
-				MAKE_SC_MOVE_START(pClient->dwID, pClient->moveDir, pClient->pos, pSC_MOVE_START_NEW_TO_ANCIENT);
-				g_GameServer.SendPacket(pAncientClient->SessionId, pSC_MOVE_START_NEW_TO_ANCIENT);
+				MAKE_SC_MOVE_START(pPlayer->dwID, pPlayer->moveDir, pPlayer->pos, pSC_MOVE_START_NEW_TO_ANCIENT);
+				g_GameServer.SendPacket(pAncient->SessionId, pSC_MOVE_START_NEW_TO_ANCIENT);
 			}
 
-			// 원시인 플레이어가 자기 생긴다고 새로 입장하는 애한테 보내기
+			// 원주민이 새로 입장하는 애한테 보내기
 			Packet* pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW = Packet::Alloc();
-			MAKE_SC_CREATE_OTHER_CHARACTER(pAncientClient->dwID, pAncientClient->viewDir, pAncientClient->pos, pAncientClient->chHp, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
-			g_GameServer.SendPacket(pClient->SessionId, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
-			if (pAncientClient->moveDir != MOVE_DIR_NOMOVE)
+			MAKE_SC_CREATE_OTHER_CHARACTER(pAncient->dwID, pAncient->viewDir, pAncient->pos, pAncient->chHp, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
+			g_GameServer.SendPacket(pPlayer->SessionId, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
+
+			// 움직인다면 원주민이 새로 입장하는 애한테 움직인다고 보낸다, 이거때문에 위에서 원주민한테 락을 건것이다
+			if (pAncient->moveDir != MOVE_DIR_NOMOVE)
 			{
 				Packet* pSC_MOVE_START_ANCIENT_TO_NEW = Packet::Alloc();
-				MAKE_SC_MOVE_START(pAncientClient->dwID, pAncientClient->moveDir, pAncientClient->pos, pSC_MOVE_START_ANCIENT_TO_NEW);
-				g_GameServer.SendPacket(pAncientClient->SessionId, pSC_MOVE_START_ANCIENT_TO_NEW);
+				MAKE_SC_MOVE_START(pAncient->dwID, pAncient->moveDir, pAncient->pos, pSC_MOVE_START_ANCIENT_TO_NEW);
+				g_GameServer.SendPacket(pAncient->SessionId, pSC_MOVE_START_ANCIENT_TO_NEW);
 			}
 			pLink = pLink->pNext;
-			ReleaseSRWLockShared(&pAncientClient->clientLock);
+			ReleaseSRWLockShared(&pAncient->playerLock);
 		}
 	}
+	AcquireSRWLockExclusive(&lockInfo.lockArr[0]);
+	AcquireSRWLockExclusive(&lockInfo.lockArr[1]);
 	// 섹터 리스트에 갱신
-	RemoveClientAtSector(pClient, oldSectorPos);
-	AddClientAtSector(pClient, newSectorPos);
+	RemoveClientAtSector(pPlayer, oldSectorPos);
+	AddClientAtSector(pPlayer, newSectorPos);
 
 	ReleaseSRWLockExclusive(&lockInfo.lockArr[1]);
 	ReleaseSRWLockExclusive(&lockInfo.lockArr[0]);
 
-	UnLockShared(&newSectorAround);
-	UnLockShared(&removeSectorAround);
+	ReleaseSectorAroundShared(&newSectorAround);
+	ReleaseSectorAroundShared(&removeSectorAround);
 }
 
 void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
@@ -177,8 +164,8 @@ void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
 	__m128i posX = _mm_set1_epi16(CurSector.shX);
 
 	// 8방향 방향벡터 X성분 Y성분 준비
-	__m128i DirVY = _mm_set_epi16(-1, -1, -1, +0, +0, +1, +1, +1);
-	__m128i DirVX = _mm_set_epi16(-1, +0, +1, -1, +1, -1, +0, +1);
+	__m128i DirVY = _mm_set_epi16(+1, +1, +1, +0, +0, -1, -1, -1);
+	__m128i DirVX = _mm_set_epi16(+1, +0, -1, +1, -1, +1, +0, -1);
 
 	// 더한다
 	posY = _mm_add_epi16(posY, DirVY);
@@ -211,7 +198,7 @@ void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
 	BYTE byCnt = 0;
 	for (int i = 0; i < 4; ++i)
 	{
-		if (ret[i] == 0xFFFF)
+		if (ret[i] == (short)0xffff)
 		{
 			pOutSectorAround->Around[byCnt].shY = Y[i];
 			pOutSectorAround->Around[byCnt].shX = X[i];
@@ -225,7 +212,7 @@ void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
 
 	for (int i = 4; i < 8; ++i)
 	{
-		if (ret[i] == 0xFFFF)
+		if (ret[i] == (short)0xffff)
 		{
 			pOutSectorAround->Around[byCnt].shY = Y[i];
 			pOutSectorAround->Around[byCnt].shX = X[i];
@@ -240,7 +227,6 @@ void GetNewSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos ne
 {
 	MOVE_DIR sectorPosArr[5];
 	BYTE byCnt = 0;
-	BYTE bySectorPosCnt = 0;
 	switch (dir)
 	{
 	case MOVE_DIR_LL:
@@ -307,6 +293,7 @@ void GetNewSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos ne
 		break;
 	}
 
+	BYTE bySectorPosCnt = 0;
 	for (BYTE i = 0; i < byCnt; ++i)
 	{
 		SectorPos tempSector;
@@ -325,7 +312,6 @@ void GetRemoveSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos
 {
 	MOVE_DIR sectorPosArr[5];
 	BYTE byCnt = 0;
-	BYTE bySectorPosCnt = 0;
 	switch (dir)
 	{
 	case MOVE_DIR_LL:
@@ -392,6 +378,7 @@ void GetRemoveSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos
 		break;
 	}
 
+	BYTE bySectorPosCnt = 0;
 	for (BYTE i = 0; i < byCnt; ++i)
 	{
 		SectorPos tempSector;

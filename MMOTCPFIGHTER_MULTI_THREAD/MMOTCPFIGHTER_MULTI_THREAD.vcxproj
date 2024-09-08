@@ -129,7 +129,6 @@
   <ItemGroup>
     <ClCompile Include="CSCContents.cpp" />
     <ClCompile Include="GameServer.cpp" />
-    <ClCompile Include="LanServer.cpp" />
     <ClCompile Include="LinkedList.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Packet.cpp" />
