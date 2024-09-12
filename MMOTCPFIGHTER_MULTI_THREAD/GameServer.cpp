@@ -403,9 +403,9 @@ void* GameServer::OnAccept(ID id)
 
 	SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, sector);
-	AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 	do
 	{
+		AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 		AcquireSRWLockExclusive(&pPlayer->playerLock);
 
 		//if (TryAcquireSectorAroundExclusive(&sectorAround))
@@ -415,6 +415,7 @@ void* GameServer::OnAccept(ID id)
 			break;
 
 		ReleaseSRWLockExclusive(&pPlayer->playerLock);
+		ReleaseSRWLockExclusive(&g_srwPlayerArrLock);
 	} while (true);
 
 	Packet* pSC_CREATE_MY_CHARACTER = Packet::Alloc();
@@ -470,9 +471,9 @@ void GameServer::OnRelease(void* pPlayer)
 	SectorPos lastSector = CalcSector(pRlsPlayer->pos);
 	SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, lastSector);
-	AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 	do
 	{
+		AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 		AcquireSRWLockExclusive(&pRlsPlayer->playerLock);
 
 		//if (TryAcquireSectorAroundExclusive(&sectorAround))
@@ -481,6 +482,7 @@ void GameServer::OnRelease(void* pPlayer)
 			break;
 
 		ReleaseSRWLockExclusive(&pRlsPlayer->playerLock);
+		ReleaseSRWLockExclusive(&g_srwPlayerArrLock);
 	} while (true);
 
 	RemoveClientAtSector(pRlsPlayer, lastSector);
