@@ -22,7 +22,6 @@
 #pragma comment(lib,"LoggerMT")
 
 FreeList<Player> ClientFreeList{ false,0 };
-extern GameServer g_GameServer;
 
 #define SERVERPORT 11402
 #define LINGER
@@ -54,7 +53,7 @@ __forceinline void ClearPacket(Session* pSession)
 
 unsigned __stdcall GameServer::AcceptThread(LPVOID arg)
 {
-	srand(time(nullptr));
+	srand((unsigned)time(nullptr));
 	SOCKET clientSock;
 	SOCKADDR_IN clientAddr;
 	int addrlen;
@@ -408,9 +407,6 @@ void* GameServer::OnAccept(ID id)
 		AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 		AcquireSRWLockExclusive(&pPlayer->playerLock);
 
-		//if (TryAcquireSectorAroundExclusive(&sectorAround))
-		//	break;
-
 		if (TryAcquireCreateDeleteSectorLock(&sectorAround, sector))
 			break;
 
@@ -476,8 +472,6 @@ void GameServer::OnRelease(void* pPlayer)
 		AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 		AcquireSRWLockExclusive(&pRlsPlayer->playerLock);
 
-		//if (TryAcquireSectorAroundExclusive(&sectorAround))
-		//	break;
 		if (TryAcquireCreateDeleteSectorLock(&sectorAround, lastSector))
 			break;
 
@@ -502,13 +496,11 @@ void GameServer::OnRelease(void* pPlayer)
 			ReleaseSRWLockShared(&pAncient->playerLock);
 		}
 	}
-	//ReleaseSectorAroundExclusive(&sectorAround);
 	ReleaseCreateDeleteSectorLock(&sectorAround, lastSector);
 	ReleasePlayer(pRlsPlayer);
 	ReleaseSRWLockExclusive(&pRlsPlayer->playerLock);
 	ClientFreeList.Free(pRlsPlayer);
 	ReleaseSRWLockExclusive(&g_srwPlayerArrLock);
-	//WRITE_MEMORY_LOG(ONRELEASE, EXCLUSIVE, RELEASE);
 }
 
 BOOL PacketProc(void* pClient, PACKET_TYPE packetType, Packet* pPacket);

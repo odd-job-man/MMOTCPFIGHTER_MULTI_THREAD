@@ -1,13 +1,16 @@
 #include <WinSock2.h>
 #include <emmintrin.h>
-#include "Sector.h"
+#include "LinkedList.h"
 #include "Packet.h"
 #include "SCCContents.h"
 #include "Stack.h"
 #include "IHandler.h"
 #include "GameServer.h"
+#include "Client.h"
 #include "Update.h"
 #include "MemLog.h"
+#include "Constant.h"
+#include "Sector.h"
 
 extern GameServer g_GameServer;
 
@@ -15,6 +18,7 @@ st_SECTOR_CLIENT_INFO g_Sector[dwNumOfSectorVertical][dwNumOfSectorHorizon];
 
 int g_iCounter;
 MemLog g_logArr[1001000];
+#define MEM_LOG
 
 
 void GetMoveLockInfo(SECTOR_AROUND* pMoveSectorAround, SectorPos prevSector, SectorPos afterSector)
@@ -103,6 +107,15 @@ __forceinline BOOL TryAcquireMoveLock(MOVE_SECTOR_INFO* pMSI)
 			}
 		}
 	}
+#ifdef MEM_LOG
+	for (int i = 0; i < pMSI->iCnt; ++i)
+	{
+		if (pMSI->bExclusive[i])
+			WRITE_MEMORY_LOG(TRY_ACQUIRE_MOVE_LOCK, EXCLUSIVE, ACQUIRE, pMSI->spArr[i]);
+		else
+			WRITE_MEMORY_LOG(TRY_ACQUIRE_MOVE_LOCK, SHARED, ACQUIRE, pMSI->spArr[i]);
+	}
+#endif
 	return TRUE;
 }
 
@@ -140,11 +153,7 @@ void RemoveClientAtSector(Player* pClient, SectorPos oldSectorPos)
 	--(g_Sector[oldSectorPos.shY][oldSectorPos.shX].iNumOfClient);
 }
 
-// 락 거는 순서
-// 영향권에서 없어진 섹터 -> 영향권에 들어오는 섹터 -> 섹터 옮기기위한 Exclusive 
-// 락 푸는 순서
-// 섹터 옮기기 위한 Exclusive -> 영향권에 들어오는 섹터 -> 영향권에서 없어진 섹터
-void SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove, BOOL IsUpdate)
+BOOL SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove)
 {
 	SECTOR_AROUND removeSectorAround;
 	GetRemoveSector(sectorMoveDir, &removeSectorAround, oldSectorPos);
@@ -159,30 +168,21 @@ void SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos ol
 	MOVE_SECTOR_INFO moveSectorInfo;
 	GetMoveSectorInfo(&moveSectorInfo, &moveSectorAround, &removeSectorAround, &newSectorAround);
 
-	// 제거되는 섹터, 새로생기는 섹터에 S락, 플레이어가 속한 섹터를 옮기기 위한  E락을 건다. Update ,Start ,Stop모두 Player의 E락을 선점하고, 이때 이동을 위해 섹터에 E락을 걸며 대기하고
-	// 다른 스레드들이 해당 플레이어에게 메시지를 보내기 위해 S락을 걸거나 여타 이유로 E락을 건 후(윗줄에서의 E락이 대기하게 된 원인), 윗줄의 플레이어에게 메시지를 보내기 위해 S락을 걸어 데드락이 발생한다
-	// 이를 방지하기 위해 플레이어에 E락을 선점한 스레드의 경우 S락이 되엇건 E락이 되엇건 섹터의 락 선점에 실패하면 플레이어 E락까지 모두 풀어버리며 뺑뺑이를 도는데 이때 Player가 Release되지 않게하기 위해 
-	// START나 Stop에서 온경우 MoveLock획득실패시 플레이어 E락 해제하고 다시 거는사이의 Release를 막기위해 srwPlayerArrLock에 S락을 건다
-	//if (!IsUpdate)
-	//{
-	//	AcquireSRWLockShared(&g_srwPlayerArrLock);
-	//	WRITE_MEMORY_LOG(SECTOR_UPDATE_AND_NOTIFY,SHARED,ACQUIRE);
-	//}
-	do
+
+	ID backUpId = pPlayer->SessionId;
+	while (!TryAcquireMoveLock(&moveSectorInfo))
 	{
-		if (TryAcquireMoveLock(&moveSectorInfo))
-		{
-			//if (!IsUpdate) {
-			//	ReleaseSRWLockShared(&g_srwPlayerArrLock);
-			//	WRITE_MEMORY_LOG(SECTOR_UPDATE_AND_NOTIFY, SHARED, RELEASE);
-			//}
-
-			break;
-		}
-
 		ReleaseSRWLockExclusive(&pPlayer->playerLock);
 		AcquireSRWLockExclusive(&pPlayer->playerLock);
-	} while (true);
+		if (!g_GameServer.IsPlayerValid(backUpId))
+			return FALSE;
+	}
+
+	if (!g_GameServer.IsPlayerValid(backUpId))
+	{
+		ReleaseMoveLock(&moveSectorInfo);
+		return FALSE;
+	}
 
 	// 시야에서 없어지는 섹터에는 pPlayer는 포함되지 않기에 pAncient == pPlayer에 대한 예외처리는 하지 않아도 된다.
 	for (int i = 0; i < removeSectorAround.iCnt; ++i)
@@ -248,6 +248,7 @@ void SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos ol
 	AddClientAtSector(pPlayer, newSectorPos);
 
 	ReleaseMoveLock(&moveSectorInfo);
+	return TRUE;
 }
 
 void GetSectorAround(SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
@@ -486,4 +487,175 @@ void GetRemoveSector(MOVE_DIR dir, SECTOR_AROUND* pOutSectorAround, SectorPos pr
 	pOutSectorAround->iCnt = bySectorPosCnt;
 }
 #pragma warning(default : 6001)
+
+void AcquireSectorAroundShared(SECTOR_AROUND* pSectorAround)
+{
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+		AcquireSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+}
+
+void AcquireSectorAroundExclusive(SECTOR_AROUND* pSectorAround)
+{
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+		AcquireSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+}
+
+BOOL TryAcquireSectorAroundExclusive(SECTOR_AROUND* pSectorAround)
+{
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+	{
+		if (TryAcquireSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+			continue;
+
+		for (int j = i - 1; j >= 0; --j)
+			ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[j].shY][pSectorAround->Around[j].shX].srwSectionLock);
+
+		return FALSE;
+	}
+#ifdef MEM_LOG
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+		WRITE_MEMORY_LOG(ACQ_SECTOR_AROUND_EXCLUSIVE_IF_PLAYER_EXCLUSIVE, EXCLUSIVE, ACQUIRE, pSectorAround->Around[i]);
+#endif
+	return TRUE;
+}
+
+BOOL TryAcquireSectorAroundShared(SECTOR_AROUND* pSectorAround)
+{
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+	{
+		if (TryAcquireSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+			continue;
+
+		for (int j = i - 1; j >= 0; --j)
+			ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[j].shY][pSectorAround->Around[j].shX].srwSectionLock);
+
+		return FALSE;
+	}
+#ifdef MEM_LOG
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+		WRITE_MEMORY_LOG(ACQ_SECTOR_AROUND_SHARED_IF_PLAYER_EXCLUSIVE, SHARED, ACQUIRE, pSectorAround->Around[i]);
+#endif
+	return TRUE;
+}
+
+BOOL AcquireSectorAroundShared_IF_PLAYER_EXCLUSIVE(Player* pExclusivePlayer, SECTOR_AROUND* pSectorAround)
+{
+	ID backUpId = pExclusivePlayer->SessionId;
+	while (!TryAcquireSectorAroundShared(pSectorAround))
+	{
+		ReleaseSRWLockExclusive(&pExclusivePlayer->playerLock);
+		AcquireSRWLockExclusive(&pExclusivePlayer->playerLock);
+		// 섹터따기 실패한경우 다시획득한 플레이어가 유효하지않으면 반환한다 (플레이어 락은 호출자가 알아서푼다)
+		if (!g_GameServer.IsPlayerValid(backUpId))
+			return FALSE;
+	}
+
+	// 섹터따기를 성공햇으나 그사이 플레이어가 유효하지 않게되어도 역시 실패이다 
+	if (!g_GameServer.IsPlayerValid(backUpId))
+	{
+		ReleaseSectorAroundShared(pSectorAround);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL AcquireSectorAroundExclusive_IF_PLAYER_EXCLUSIVE(Player* pExclusivePlayer, SECTOR_AROUND* pSectorAround)
+{
+	ID backUpId = pExclusivePlayer->SessionId;
+	while (!TryAcquireSectorAroundExclusive(pSectorAround))
+	{
+		ReleaseSRWLockExclusive(&pExclusivePlayer->playerLock);
+		AcquireSRWLockExclusive(&pExclusivePlayer->playerLock);
+		// 섹터따기 실패한경우 다시획득한 플레이어가 유효하지않으면 반환한다 (플레이어 락은 호출자가 알아서푼다)
+		if (!g_GameServer.IsPlayerValid(backUpId))
+			return FALSE;
+	}
+
+	// 섹터따기를 성공햇으나 그사이 플레이어가 유효하지 않게되어도 역시 실패이다 
+	if (!g_GameServer.IsPlayerValid(backUpId))
+	{
+		ReleaseSectorAroundExclusive(pSectorAround);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+void ReleaseSectorAroundExclusive(SECTOR_AROUND* pSectorAround)
+{
+	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
+	{
+		ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+#ifdef MEM_LOG
+		WRITE_MEMORY_LOG(RELEASE_SECTOR_AROUND_EXCLUSIVE, EXCLUSIVE, RELEASE, pSectorAround->Around[i]);
+#endif
+	}
+}
+
+void ReleaseSectorAroundShared(SECTOR_AROUND* pSectorAround)
+{
+	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
+	{
+		ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+#ifdef MEM_LOG
+		WRITE_MEMORY_LOG(RELEASE_SECTOR_AROUND_SHARED, SHARED, RELEASE, pSectorAround->Around[i]);
+#endif
+	}
+}
+
+BOOL TryAcquireCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos playerSector)
+{
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+	{
+		if (pSectorAround->Around[i].YX == playerSector.YX)
+		{
+			if (TryAcquireSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+				continue;
+		}
+		else
+		{
+			if (TryAcquireSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+				continue;
+		}
+
+		for (int j = i - 1; j >= 0; --j)
+		{
+			if (pSectorAround->Around[j].YX == playerSector.YX)
+				ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[j].shY][pSectorAround->Around[j].shX].srwSectionLock);
+			else
+				ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[j].shY][pSectorAround->Around[j].shX].srwSectionLock);
+		}
+		return FALSE;
+	}
+#ifdef MEM_LOG
+	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
+	{
+		if (pSectorAround->Around[i].YX == playerSector.YX)
+			WRITE_MEMORY_LOG(TRY_ACQUIRE_CREATE_DELETE_LOCKS, EXCLUSIVE, ACQUIRE, pSectorAround->Around[i]);
+		else
+			WRITE_MEMORY_LOG(TRY_ACQUIRE_CREATE_DELETE_LOCKS, SHARED, ACQUIRE, pSectorAround->Around[i]);
+	}
+#endif
+	return TRUE;
+}
+
+void ReleaseCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos playerSector)
+{
+	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
+	{
+		if (pSectorAround->Around[i].YX == playerSector.YX)
+			ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+		else
+			ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+	}
+#ifdef MEM_LOG
+	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
+	{
+		if (pSectorAround->Around[i].YX == playerSector.YX)
+			WRITE_MEMORY_LOG(RELEASE_CREATE_DELETE_LOCKS, EXCLUSIVE, RELEASE, pSectorAround->Around[i]);
+		else
+			WRITE_MEMORY_LOG(RELEASE_CREATE_DELETE_LOCKS, SHARED, RELEASE, pSectorAround->Around[i]);
+	}
+#endif
+}
 

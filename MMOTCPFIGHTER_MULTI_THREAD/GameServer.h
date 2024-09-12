@@ -5,6 +5,13 @@ public:
 	BOOL Start(DWORD dwMaxSession);
 	void SendPacket(ID id, Packet* pPacket);
 	virtual BOOL OnConnectionRequest();
+
+	__forceinline BOOL IsPlayerValid(ID id)
+	{
+		Session* pSession = pSessionArr_ + GET_SESSION_INDEX(id);
+		return pSession->bUsing == TRUE && pSession->id.ullId == id.ullId;
+	};
+
 	virtual void* OnAccept(ID id);
 	virtual void OnRecv(void* pClient, Packet* pPacket);
 	virtual void OnRelease(void* pPlayer);

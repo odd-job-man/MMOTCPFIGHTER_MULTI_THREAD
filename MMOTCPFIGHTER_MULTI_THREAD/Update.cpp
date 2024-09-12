@@ -1,3 +1,7 @@
+#include <Windows.h>
+#include "LinkedList.h"
+#include "Constant.h"
+#include "Position.h"
 #include "Sector.h"
 #include "Constant.h"
 #include "Client.h"
@@ -10,7 +14,6 @@ SRWLOCK g_srwPlayerArrLock;
 void Update()
 {
 	AcquireSRWLockShared(&g_srwPlayerArrLock);
-	//WRITE_MEMORY_LOG(UPDATE, SHARED, ACQUIRE);
 	for (DWORD i = 0; i < g_dwPlayerNum; ++i)
 	{
 		Player* pPlayer = g_playerArr[i];
@@ -45,11 +48,12 @@ void Update()
 		}
 
 		MOVE_DIR sectorMoveDir = GetSectorMoveDir(oldSector, newSector);
-		SectorUpdateAndNotify(pPlayer, sectorMoveDir, oldSector, newSector, TRUE, TRUE);
+
+		// Update는 이미 자료구조에 대한 락을 들고잇기 때문에 뭘하던지 중간에 세션이 릴리즈 될 위험성 자체가 없음
+		SectorUpdateAndNotify(pPlayer, sectorMoveDir, oldSector, newSector, TRUE);
 
 		pPlayer->pos = newPos;
 		ReleaseSRWLockExclusive(&pPlayer->playerLock);
 	}
 	ReleaseSRWLockShared(&g_srwPlayerArrLock);
-	//WRITE_MEMORY_LOG(UPDATE, SHARED, RELEASE);
 }

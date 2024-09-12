@@ -4,6 +4,13 @@
 #include "ID.h"
 #include "Constant.h"
 #include "MOVE_DIR.h"
+
+struct HitInfo
+{
+	LINKED_NODE hitLink;
+	ID BackUpSessionId;
+};
+
 struct Player
 {
 	ID SessionId;
@@ -12,9 +19,9 @@ struct Player
 	Pos pos;
 	MOVE_DIR viewDir;
 	MOVE_DIR moveDir;
-	LONG hp;
+	CHAR hp;
 	LINKED_NODE SectorLink;
-	LINKED_NODE HitLink;
+	HitInfo hitInfo;
 	DWORD dwUpdateArrIdx;
 #pragma warning(disable : 26495)
 	Player()
