@@ -402,16 +402,14 @@ void* GameServer::OnAccept(ID id)
 
 	SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, sector);
+	AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 	do
 	{
-		AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 		AcquireSRWLockExclusive(&pPlayer->playerLock);
-
 		if (TryAcquireCreateDeleteSectorLock(&sectorAround, sector))
 			break;
 
 		ReleaseSRWLockExclusive(&pPlayer->playerLock);
-		ReleaseSRWLockExclusive(&g_srwPlayerArrLock);
 	} while (true);
 
 	Packet* pSC_CREATE_MY_CHARACTER = Packet::Alloc();
@@ -453,7 +451,6 @@ void* GameServer::OnAccept(ID id)
 
 	// Update에서 사용할 배열에 Player를 추가한다.
 	RegisterPlayer(pPlayer);
-	//ReleaseSectorAroundExclusive(&sectorAround);
 	ReleaseCreateDeleteSectorLock(&sectorAround, sector);
 	ReleaseSRWLockExclusive(&pPlayer->playerLock);
 	ReleaseSRWLockExclusive(&g_srwPlayerArrLock);
@@ -467,16 +464,14 @@ void GameServer::OnRelease(void* pPlayer)
 	SectorPos lastSector = CalcSector(pRlsPlayer->pos);
 	SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, lastSector);
+	AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 	do
 	{
-		AcquireSRWLockExclusive(&g_srwPlayerArrLock);
 		AcquireSRWLockExclusive(&pRlsPlayer->playerLock);
-
 		if (TryAcquireCreateDeleteSectorLock(&sectorAround, lastSector))
 			break;
 
 		ReleaseSRWLockExclusive(&pRlsPlayer->playerLock);
-		ReleaseSRWLockExclusive(&g_srwPlayerArrLock);
 	} while (true);
 
 	RemoveClientAtSector(pRlsPlayer, lastSector);

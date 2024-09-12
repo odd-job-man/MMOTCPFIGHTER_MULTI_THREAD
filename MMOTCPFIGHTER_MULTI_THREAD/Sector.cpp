@@ -18,7 +18,6 @@ st_SECTOR_CLIENT_INFO g_Sector[dwNumOfSectorVertical][dwNumOfSectorHorizon];
 
 int g_iCounter;
 MemLog g_logArr[1001000];
-#define MEM_LOG
 
 
 void GetMoveLockInfo(SECTOR_AROUND* pMoveSectorAround, SectorPos prevSector, SectorPos afterSector)
@@ -107,15 +106,6 @@ __forceinline BOOL TryAcquireMoveLock(MOVE_SECTOR_INFO* pMSI)
 			}
 		}
 	}
-#ifdef MEM_LOG
-	for (int i = 0; i < pMSI->iCnt; ++i)
-	{
-		if (pMSI->bExclusive[i])
-			WRITE_MEMORY_LOG(TRY_ACQUIRE_MOVE_LOCK, EXCLUSIVE, ACQUIRE, pMSI->spArr[i]);
-		else
-			WRITE_MEMORY_LOG(TRY_ACQUIRE_MOVE_LOCK, SHARED, ACQUIRE, pMSI->spArr[i]);
-	}
-#endif
 	return TRUE;
 }
 
@@ -512,10 +502,6 @@ BOOL TryAcquireSectorAroundExclusive(SECTOR_AROUND* pSectorAround)
 
 		return FALSE;
 	}
-#ifdef MEM_LOG
-	for (int i = 0; i < pSectorAround->iCnt; ++i)
-		WRITE_MEMORY_LOG(ACQ_SECTOR_AROUND_EXCLUSIVE_IF_PLAYER_EXCLUSIVE, EXCLUSIVE, ACQUIRE, pSectorAround->Around[i]);
-#endif
 	return TRUE;
 }
 
@@ -531,10 +517,6 @@ BOOL TryAcquireSectorAroundShared(SECTOR_AROUND* pSectorAround)
 
 		return FALSE;
 	}
-#ifdef MEM_LOG
-	for (int i = 0; i < pSectorAround->iCnt; ++i)
-		WRITE_MEMORY_LOG(ACQ_SECTOR_AROUND_SHARED_IF_PLAYER_EXCLUSIVE, SHARED, ACQUIRE, pSectorAround->Around[i]);
-#endif
 	return TRUE;
 }
 
@@ -584,23 +566,13 @@ BOOL AcquireSectorAroundExclusive_IF_PLAYER_EXCLUSIVE(Player* pExclusivePlayer, 
 void ReleaseSectorAroundExclusive(SECTOR_AROUND* pSectorAround)
 {
 	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
-	{
 		ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
-#ifdef MEM_LOG
-		WRITE_MEMORY_LOG(RELEASE_SECTOR_AROUND_EXCLUSIVE, EXCLUSIVE, RELEASE, pSectorAround->Around[i]);
-#endif
-	}
 }
 
 void ReleaseSectorAroundShared(SECTOR_AROUND* pSectorAround)
 {
 	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
-	{
 		ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
-#ifdef MEM_LOG
-		WRITE_MEMORY_LOG(RELEASE_SECTOR_AROUND_SHARED, SHARED, RELEASE, pSectorAround->Around[i]);
-#endif
-	}
 }
 
 BOOL TryAcquireCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos playerSector)
@@ -627,15 +599,6 @@ BOOL TryAcquireCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos pl
 		}
 		return FALSE;
 	}
-#ifdef MEM_LOG
-	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
-	{
-		if (pSectorAround->Around[i].YX == playerSector.YX)
-			WRITE_MEMORY_LOG(TRY_ACQUIRE_CREATE_DELETE_LOCKS, EXCLUSIVE, ACQUIRE, pSectorAround->Around[i]);
-		else
-			WRITE_MEMORY_LOG(TRY_ACQUIRE_CREATE_DELETE_LOCKS, SHARED, ACQUIRE, pSectorAround->Around[i]);
-	}
-#endif
 	return TRUE;
 }
 
@@ -648,14 +611,5 @@ void ReleaseCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos playe
 		else
 			ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
 	}
-#ifdef MEM_LOG
-	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
-	{
-		if (pSectorAround->Around[i].YX == playerSector.YX)
-			WRITE_MEMORY_LOG(RELEASE_CREATE_DELETE_LOCKS, EXCLUSIVE, RELEASE, pSectorAround->Around[i]);
-		else
-			WRITE_MEMORY_LOG(RELEASE_CREATE_DELETE_LOCKS, SHARED, RELEASE, pSectorAround->Around[i]);
-	}
-#endif
 }
 

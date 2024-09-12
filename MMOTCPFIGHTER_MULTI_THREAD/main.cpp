@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "client.h"
 #include "Update.h"
+extern UINT64 g_SyncCnt;
 
 GameServer g_GameServer;
 
@@ -64,6 +65,7 @@ int main()
 			printf("-----------------------------------------------------\n");
 			printf("Elapsed Time : %02lluD-%02lluH-%02lluMin-%02lluSec\n", ullElapsedDay, ullElapsedHour, ullElapsedMin, ullElapsedSecond);
 			printf("fps : %d\n", g_iFPS);
+			printf("Sync : %llu\n", g_SyncCnt);
 			printf("-----------------------------------------------------\n");
 			g_iFpsCheck += 1000;
 			g_iFPS = 0;

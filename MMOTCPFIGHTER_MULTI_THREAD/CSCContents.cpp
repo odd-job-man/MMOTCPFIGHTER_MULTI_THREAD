@@ -13,6 +13,8 @@
 #include <stdio.h>
 extern GameServer g_GameServer;
 
+UINT64 g_SyncCnt = 0;
+
 __forceinline Player* HitLinkToPlayer(LINKED_NODE* pHitLink)
 {
 	Player* pRet = (Player*)((char*)pHitLink - offsetof(Player, hitInfo.hitLink));
@@ -64,6 +66,7 @@ __forceinline void ProcessPlayerViewDir(Player* pMoveStartPlayer, MOVE_DIR moveD
 
 BOOL SyncProc(Player* pSyncPlayer, SectorPos recvSector)
 {
+	InterlockedIncrement(&g_SyncCnt);
 	SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, recvSector);
 
