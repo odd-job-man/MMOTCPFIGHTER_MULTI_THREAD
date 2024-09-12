@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <WinSock2.h>
 #include <windows.h>
+#include <time.h>
 #include "Logger.h"
 #include "IHandler.h"
 #include "Stack.h"
@@ -14,11 +15,13 @@
 #include "Sector.h"
 #include "SCCContents.h"
 #include "CSCContents.h"
+#include "Update.h"
+#include "MemLog.h"
 
 #pragma comment(lib,"ws2_32")
 #pragma comment(lib,"LoggerMT")
 
-FreeList<st_Client> ClientFreeList{ false,0 };
+FreeList<Player> ClientFreeList{ false,0 };
 extern GameServer g_GameServer;
 
 #define SERVERPORT 11402
@@ -51,6 +54,7 @@ __forceinline void ClearPacket(Session* pSession)
 
 unsigned __stdcall GameServer::AcceptThread(LPVOID arg)
 {
+	srand(time(nullptr));
 	SOCKET clientSock;
 	SOCKADDR_IN clientAddr;
 	int addrlen;
@@ -71,15 +75,11 @@ unsigned __stdcall GameServer::AcceptThread(LPVOID arg)
 			return 0;
 		}
 
-
 		if (!pGameServer->OnConnectionRequest())
 		{
 			closesocket(clientSock);
 			continue;
 		}
-
-		InterlockedIncrement((LONG*)&pGameServer->lAcceptTPS_);
-		InterlockedIncrement((LONG*)&pGameServer->lSessionNum_);
 
 		SHORT shIndex;
 		EnterCriticalSection(&pGameServer->stackLock_);
@@ -91,11 +91,10 @@ unsigned __stdcall GameServer::AcceptThread(LPVOID arg)
 		++g_dwID;
 
 		InterlockedIncrement(&pSession->IoCnt);
-		pSession->pClient = pGameServer->OnAccept(pSession->id);
+		pSession->pPlayer = pGameServer->OnAccept(pSession->id);
 		pGameServer->RecvPost(pSession);
 		if (InterlockedDecrement(&pSession->IoCnt) == 0)
 			pGameServer->ReleaseSession(pSession);
-
 	}
 }
 
@@ -109,9 +108,6 @@ unsigned __stdcall GameServer::IOCPWorkerThread(LPVOID arg)
 		Session* pSession = nullptr;
 		BOOL bGQCSRet = GetQueuedCompletionStatus(pGameServer->hcp_, &dwNOBT, (PULONG_PTR)&pSession, (LPOVERLAPPED*)&pOverlapped, INFINITE);
 
-#ifdef GQCSRET
-		LOG(L"DEBUG", DEBUG, TEXTFILE, L"Thread ID : %u, GQCS return Session ID : %llu, IoCount : %d", GetCurrentThreadId(), pSession->id.ullId, InterlockedExchange((LONG*)&pSession->IoCnt, pSession->IoCnt));
-#endif
 		do
 		{
 			if (!pOverlapped && !dwNOBT && !pSession)
@@ -229,9 +225,6 @@ void GameServer::ReleaseSession(Session* pSession)
 	closesocket(pSession->sock);
 	InterlockedExchange((LONG*)&pSession->bUsing, FALSE);
 	SHORT shIndex = (SHORT)(pSession - pSessionArr_);
-	if (pSession->sendRB.GetUseSize() > 0)
-		__debugbreak();
-
 	EnterCriticalSection(&stackLock_);
 	DisconnectStack_.Push((void**)&shIndex);
 	LeaveCriticalSection(&stackLock_);
@@ -256,7 +249,7 @@ void GameServer::RecvProc(Session* pSession, DWORD dwNumberOfBytesTransferred)
 		pSession->recvRB.MoveOutPos(sizeof(header));
 		pSession->recvRB.Dequeue(pPacket->GetBufferPtr(), header.byLen + sizeof(BYTE));
 		pPacket->MoveWritePos(header.byLen + sizeof(BYTE));
-		OnRecv(pSession->pClient, pPacket);
+		OnRecv(pSession->pPlayer, pPacket);
 		pPacket->Clear();
 	}
 	RecvPost(pSession);
@@ -343,8 +336,8 @@ BOOL GameServer::Start(DWORD dwMaxSession)
 	LOG(L"ONOFF", SYSTEM, TEXTFILE, L"Zerobyte Send OK");
 #endif
 
-	hIOCPWorkerThreadArr_ = new HANDLE[si.dwNumberOfProcessors * 2];
-	for (DWORD i = 0; i < si.dwNumberOfProcessors * 2; ++i)
+	hIOCPWorkerThreadArr_ = new HANDLE[si.dwNumberOfProcessors];
+	for (DWORD i = 0; i < si.dwNumberOfProcessors; ++i)
 	{
 		hIOCPWorkerThreadArr_[i] = (HANDLE)_beginthreadex(NULL, 0, IOCPWorkerThread, this, 0, nullptr);
 		if (!hIOCPWorkerThreadArr_[i])
@@ -383,7 +376,9 @@ void GameServer::SendPacket(ID id, Packet* pPacket)
 		NET_HEADER* pNetHeader = (NET_HEADER*)pPacket->pBuffer_;
 		pNetHeader->byCode = (BYTE)0x89;
 		pNetHeader->byLen = pPacket->GetUsedDataSize() - 1;
+		AcquireSRWLockExclusive(&pSession->sendRBLock);
 		pSession->sendRB.Enqueue((const char*)&pPacket, sizeof(pPacket));
+		ReleaseSRWLockExclusive(&pSession->sendRBLock);
 		SendPost(pSession);
 	}
 }
@@ -398,42 +393,51 @@ BOOL GameServer::OnConnectionRequest()
 
 void* GameServer::OnAccept(ID id)
 {
-	Pos clientPos;
-	clientPos.shY = 300;
-	clientPos.shX = 300;
+	Pos playerPos;
+	//playerPos.shY = 300;
+	//playerPos.shX = 300;
+	playerPos.shY = (rand() % (dfRANGE_MOVE_BOTTOM - 1)) + 1;
+	playerPos.shX = (rand() % (dfRANGE_MOVE_RIGHT - 1)) + 1;
 
-	SectorPos sector = CalcSector(clientPos);
+	SectorPos sector = CalcSector(playerPos);
+	Player* pPlayer = ClientFreeList.Alloc();
+	pPlayer->Init(id, playerPos);
 
-	st_Client* pClient = ClientFreeList.Alloc();
+	SECTOR_AROUND sectorAround;
+	GetSectorAround(&sectorAround, sector);
+	AcquireSRWLockExclusive(&g_srwPlayerArrLock);
+	//WRITE_MEMORY_LOG(ONACCEPT, EXCLUSIVE, ACQUIRE);
+	do
+	{
+		AcquireSRWLockExclusive(&pPlayer->playerLock);
 
-	AcquireSRWLockExclusive(&pClient->playerLock);
-	pClient->Init(id, clientPos, sector);
+		if (TryAcquireSectorAroundExclusive(&sectorAround))
+			break;
+
+		ReleaseSRWLockExclusive(&pPlayer->playerLock);
+	} while (true);
 
 	Packet* pSC_CREATE_MY_CHARACTER = Packet::Alloc();
-	MAKE_SC_CREATE_MY_CHARACTER(pClient->dwID, MOVE_DIR_LL, clientPos, INIT_HP, pSC_CREATE_MY_CHARACTER);
-	SendPacket(pClient->SessionId, pSC_CREATE_MY_CHARACTER);
+	MAKE_SC_CREATE_MY_CHARACTER(pPlayer->dwID, MOVE_DIR_LL, playerPos, INIT_HP, pSC_CREATE_MY_CHARACTER);
+	SendPacket(pPlayer->SessionId, pSC_CREATE_MY_CHARACTER);
 
-	// 주위 9개의 섹터에 락을건다
-	st_SECTOR_AROUND sectorAround;
-	GetSectorAround(&sectorAround, sector);
-	AcquireSectorAroundExclusive(&sectorAround);
-	for (BYTE i = 0; i < sectorAround.byCount; ++i)
+	for (int i = 0; i < sectorAround.iCnt; ++i)
 	{
 		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[sectorAround.Around[i].shY][sectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
-		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
+		for (int j = 0; j < pSCI->iNumOfClient; ++j)
 		{
 			// 기존 플레이어의 존재를 알릴 패킷을 담을 직렬화 버퍼를 할당하고 패킷을 담아서 새로운 플레이어에게 전송
 			Packet* pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT = Packet::Alloc();
-			MAKE_SC_CREATE_OTHER_CHARACTER(pClient->dwID, MOVE_DIR_LL, clientPos, INIT_HP, pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
+			MAKE_SC_CREATE_OTHER_CHARACTER(pPlayer->dwID, MOVE_DIR_LL, playerPos, INIT_HP, pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
 
-			st_Client* pAncient = LinkToClient(pLink);
+			Player* pAncient = LinkToClient(pLink);
 			AcquireSRWLockShared(&pAncient->playerLock);
 			SendPacket(pAncient->SessionId,pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
 
 			// 기존 플레이어의 존재를 알릴 패킷을 담을 직렬화 버퍼를 할당하고 패킷을 담아서 새로운 플레이어에게 전송
 			Packet* pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW = Packet::Alloc();
-			MAKE_SC_CREATE_OTHER_CHARACTER(pAncient->dwID, pAncient->viewDir, pAncient->pos, pAncient->chHp, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
+			MAKE_SC_CREATE_OTHER_CHARACTER(pAncient->dwID, pAncient->viewDir, pAncient->pos, pAncient->hp, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
 			SendPacket(id, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
 
 			// 만약 해당 기존 플레이어가 움직이는 중이라면 직렬화 버퍼를 할당해서 패킷을 담아서 새로운 플레이어에게 전송
@@ -448,43 +452,58 @@ void* GameServer::OnAccept(ID id)
 		}
 	}
 	// 새로운 플레이어를 섹터에 추가한다
-	AddClientAtSector(pClient, sector);
+	AddClientAtSector(pPlayer, sector);
+
+	// Update에서 사용할 배열에 Player를 추가한다.
+	RegisterPlayer(pPlayer);
 	ReleaseSectorAroundExclusive(&sectorAround);
-	ReleaseSRWLockExclusive(&pClient->playerLock);
-	return pClient;
+	ReleaseSRWLockExclusive(&pPlayer->playerLock);
+	ReleaseSRWLockExclusive(&g_srwPlayerArrLock);
+	return pPlayer;
 }
 
-void GameServer::OnRelease(void* pClient)
+void GameServer::OnRelease(void* pPlayer)
 {
-	st_Client* pReleaseClient = (st_Client*)pClient;
-	AcquireSRWLockExclusive(&pReleaseClient->playerLock);
+	Player* pRlsPlayer = (Player*)pPlayer;
 
-	SectorPos curSector = CalcSector(pReleaseClient->pos);
-	st_SECTOR_AROUND sectorAround;
-	GetSectorAround(&sectorAround, curSector);
-	AcquireSectorAroundExclusive(&sectorAround);
-	RemoveClientAtSector(pReleaseClient, curSector);
+	SectorPos lastSector = CalcSector(pRlsPlayer->pos);
+	SECTOR_AROUND sectorAround;
+	GetSectorAround(&sectorAround, lastSector);
+	AcquireSRWLockExclusive(&g_srwPlayerArrLock);
+	//WRITE_MEMORY_LOG(ONRELEASE, EXCLUSIVE, ACQUIRE);
+	do
+	{
+		AcquireSRWLockExclusive(&pRlsPlayer->playerLock);
 
-	for (BYTE i = 0; i < sectorAround.byCount; ++i)
+		if (TryAcquireSectorAroundExclusive(&sectorAround))
+			break;
+
+		ReleaseSRWLockExclusive(&pRlsPlayer->playerLock);
+	} while (true);
+
+	RemoveClientAtSector(pRlsPlayer, lastSector);
+	for (int i = 0; i < sectorAround.iCnt; ++i)
 	{
 		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[sectorAround.Around[i].shY][sectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
-		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
+		for (int j = 0; j < pSCI->iNumOfClient; ++j)
 		{
 			Packet* pSC_DELETE_CHARACTER_RELEASE_TO_ALL = Packet::Alloc();
-			MAKE_SC_DELETE_CHARACTER(pReleaseClient->dwID, pSC_DELETE_CHARACTER_RELEASE_TO_ALL);
+			MAKE_SC_DELETE_CHARACTER(pRlsPlayer->dwID, pSC_DELETE_CHARACTER_RELEASE_TO_ALL);
 
-			st_Client* pAncient = LinkToClient(pLink);
+			Player* pAncient = LinkToClient(pLink);
 			AcquireSRWLockShared(&pAncient->playerLock);
 			SendPacket(pAncient->SessionId, pSC_DELETE_CHARACTER_RELEASE_TO_ALL);
 			pLink = pLink->pNext;
 			ReleaseSRWLockShared(&pAncient->playerLock);
 		}
 	}
-
 	ReleaseSectorAroundExclusive(&sectorAround);
-	ClientFreeList.Free(pReleaseClient);
-	ReleaseSRWLockExclusive(&pReleaseClient->playerLock);
+	ReleasePlayer(pRlsPlayer);
+	ReleaseSRWLockExclusive(&pRlsPlayer->playerLock);
+	ClientFreeList.Free(pRlsPlayer);
+	ReleaseSRWLockExclusive(&g_srwPlayerArrLock);
+	//WRITE_MEMORY_LOG(ONRELEASE, EXCLUSIVE, RELEASE);
 }
 
 BOOL PacketProc(void* pClient, PACKET_TYPE packetType, Packet* pPacket);
@@ -496,85 +515,23 @@ void GameServer::OnRecv(void* pClient, Packet* pPacket)
 	PacketProc(pClient, packetType, pPacket);
 }
 
-int GameServer::GetAllValidClient(void** ppOutClientArr)
-{
-	int iCnt = 0;
-	for (DWORD i = 0; i < MAX_SESSION; ++i)
-	{
-		if (!pSessionArr_[i].bUsing)
-			continue;
-
-		ppOutClientArr[iCnt++] = pSessionArr_[i].pClient;
-	}
-	return iCnt;
-}
-
 BOOL PacketProc(void* pClient, PACKET_TYPE packetType, Packet* pPacket)
 {
 	switch (packetType)
 	{
 	case dfPACKET_CS_MOVE_START:
-		return CS_MOVE_START_RECV((st_Client*)pClient, pPacket);
+		return CS_MOVE_START_RECV((Player*)pClient, pPacket);
 	case dfPACKET_CS_MOVE_STOP:
-		return CS_MOVE_STOP_RECV((st_Client*)pClient, pPacket);
+		return CS_MOVE_STOP_RECV((Player*)pClient, pPacket);
 	case dfPACKET_CS_ATTACK1:
-		return CS_ATTACK1_RECV((st_Client*)pClient, pPacket);
+		return CS_ATTACK1_RECV((Player*)pClient, pPacket);
 	case dfPACKET_CS_ATTACK2:
-		return CS_ATTACK2_RECV((st_Client*)pClient, pPacket);
+		return CS_ATTACK2_RECV((Player*)pClient, pPacket);
 	case dfPACKET_CS_ATTACK3:
-		return CS_ATTACK3_RECV((st_Client*)pClient, pPacket);
+		return CS_ATTACK3_RECV((Player*)pClient, pPacket);
 	case dfPACKET_CS_ECHO:
-		return CS_ECHO_RECV((st_Client*)pClient, pPacket);
+		return CS_ECHO_RECV((Player*)pClient, pPacket);
 	default:
-
 		return FALSE;
-	}
-}
-
-void Update()
-{
-	st_Client* pClientArr[MAX_SESSION];
-	int iPlayerNum = g_GameServer.GetAllValidClient((void**)&pClientArr);
-
-	for (int i = 0; i < iPlayerNum; ++i)
-	{
-		st_Client* pPlayer = pClientArr[i];
-		AcquireSRWLockExclusive(&pPlayer->playerLock);
-
-		if (pPlayer->moveDir == MOVE_DIR_NOMOVE)
-		{
-			ReleaseSRWLockExclusive(&pPlayer->playerLock);
-			continue;
-		}
-
-		Pos oldPos = pPlayer->pos;
-		Pos newPos;
-		newPos.shY = oldPos.shY + vArr[pPlayer->moveDir].shY * dfSPEED_PLAYER_Y;
-		newPos.shX = oldPos.shX + vArr[pPlayer->moveDir].shX * dfSPEED_PLAYER_X;
-
-		if (!IsValidPos(newPos))
-		{
-			ReleaseSRWLockExclusive(&pPlayer->playerLock);
-			continue;
-		}
-
-
-		SectorPos oldSector = CalcSector(oldPos);
-		SectorPos newSector = CalcSector(newPos);
-
-		if (IsSameSector(oldSector, newSector))
-		{
-			pPlayer->pos = newPos;
-			//printf("Thread ID : %u, (%d,%d) -> (%d,%d)\n", GetCurrentThreadId(), oldPos.shX, oldPos.shY, newPos.shX, newPos.shY);
-			ReleaseSRWLockExclusive(&pPlayer->playerLock);
-			continue;
-		}
-
-		MOVE_DIR sectorMoveDir = GetSectorMoveDir(oldSector, newSector);
-		SectorUpdateAndNotify(pPlayer, sectorMoveDir, oldSector, newSector, TRUE);
-
-		pPlayer->pos = newPos;
-		//printf("Thread ID : %u, (%d,%d) -> (%d,%d)\n", GetCurrentThreadId(), oldPos.shX, oldPos.shY, newPos.shX, newPos.shY);
-		ReleaseSRWLockExclusive(&pPlayer->playerLock);
 	}
 }

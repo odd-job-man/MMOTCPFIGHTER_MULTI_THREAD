@@ -137,6 +137,7 @@
     <ClCompile Include="Sector.cpp" />
     <ClCompile Include="Session.cpp" />
     <ClCompile Include="Stack.cpp" />
+    <ClCompile Include="Update.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Client.h" />
@@ -151,6 +152,7 @@
     <ClInclude Include="LanServer.h" />
     <ClInclude Include="LinkedList.h" />
     <ClInclude Include="Logger.h" />
+    <ClInclude Include="MemLog.h" />
     <ClInclude Include="MOVE_DIR.h" />
     <ClInclude Include="Packet.h" />
     <ClInclude Include="Position.h" />
@@ -159,6 +161,7 @@
     <ClInclude Include="Sector.h" />
     <ClInclude Include="Session.h" />
     <ClInclude Include="Stack.h" />
+    <ClInclude Include="Update.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

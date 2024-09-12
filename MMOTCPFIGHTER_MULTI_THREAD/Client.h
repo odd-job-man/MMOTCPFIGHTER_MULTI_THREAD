@@ -4,7 +4,7 @@
 #include "ID.h"
 #include "Constant.h"
 #include "MOVE_DIR.h"
-struct st_Client
+struct Player
 {
 	ID SessionId;
 	SRWLOCK playerLock;
@@ -12,36 +12,33 @@ struct st_Client
 	Pos pos;
 	MOVE_DIR viewDir;
 	MOVE_DIR moveDir;
-	CHAR chHp;
-	SectorPos CurSector;
-	SectorPos OldSector;
+	LONG hp;
 	LINKED_NODE SectorLink;
-
+	LINKED_NODE HitLink;
+	DWORD dwUpdateArrIdx;
 #pragma warning(disable : 26495)
-	st_Client()
+	Player()
 	{
 		InitializeSRWLock(&playerLock);
 	}
 #pragma warning(default : 26495)
 
-	__forceinline void Init(ID id, Pos pos, SectorPos sectorPos)
+	__forceinline void Init(ID id, Pos pos)
 	{
 		this->SessionId = id;
 		this->dwID = ServerIDToClientID(id);
 		this->pos = pos;
 		this->viewDir = MOVE_DIR_LL;
 		this->moveDir = MOVE_DIR_NOMOVE;
-		this->chHp = INIT_HP;
-		this->CurSector = sectorPos;
-		this->OldSector = sectorPos;
+		this->hp = INIT_HP;
 	}
 };
 
 #pragma optimize("",on)
-__forceinline st_Client* LinkToClient(LINKED_NODE* pLink)
+__forceinline Player* LinkToClient(LINKED_NODE* pLink)
 {
-	st_Client* pRet;
-	pRet = (st_Client*)((char*)pLink - offsetof(st_Client, SectorLink));
+	Player* pRet;
+	pRet = (Player*)((char*)pLink - offsetof(Player, SectorLink));
 	return pRet;
 }
 #pragma optimize("",off)

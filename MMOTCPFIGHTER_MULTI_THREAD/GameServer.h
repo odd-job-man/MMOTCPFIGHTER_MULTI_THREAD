@@ -7,8 +7,7 @@ public:
 	virtual BOOL OnConnectionRequest();
 	virtual void* OnAccept(ID id);
 	virtual void OnRecv(void* pClient, Packet* pPacket);
-	virtual void OnRelease(void* pClient);
-	int GetAllValidClient(void** ppOutClientArr);
+	virtual void OnRelease(void* pPlayer);
 	static unsigned __stdcall AcceptThread(LPVOID arg);
 	static unsigned __stdcall IOCPWorkerThread(LPVOID arg);
 	Session* pSessionArr_;

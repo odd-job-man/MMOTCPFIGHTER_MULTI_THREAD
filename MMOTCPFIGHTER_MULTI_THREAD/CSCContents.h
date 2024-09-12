@@ -16,17 +16,17 @@ enum PACKET_TYPE : BYTE
 	dfPACKET_CS_ECHO = 252,
 };
 
-BOOL CS_MOVE_START(st_Client* pPlayer, MOVE_DIR moveDir, Pos clientPos);
-BOOL CS_MOVE_STOP(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos);
-BOOL CS_ATTACK1(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos);
-BOOL CS_ATTACK2(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos);
-BOOL CS_ATTACK3(st_Client* pPlayer, MOVE_DIR viewDir, Pos playerPos);
-BOOL CS_ECHO(st_Client* pClient, DWORD dwTime);
+BOOL CS_MOVE_START(Player* pPlayer, MOVE_DIR moveDir, Pos playerPos);
+BOOL CS_MOVE_STOP(Player* pPlayer, MOVE_DIR viewDir, Pos playerPos);
+BOOL CS_ATTACK1(Player* pPlayer, MOVE_DIR viewDir, Pos playerPos);
+BOOL CS_ATTACK2(Player* pPlayer, MOVE_DIR viewDir, Pos playerPos);
+BOOL CS_ATTACK3(Player* pPlayer, MOVE_DIR viewDir, Pos playerPos);
+BOOL CS_ECHO(Player* pClient, DWORD dwTime);
 
 BOOL PacketProc(void* pClient, BYTE byPacketType);
 #pragma optimize("",on)
 
-__forceinline BOOL CS_MOVE_START_RECV(st_Client* pClient, Packet* pPacket)
+__forceinline BOOL CS_MOVE_START_RECV(Player* pClient, Packet* pPacket)
 {
 	MOVE_DIR moveDir;
 	Pos pos;
@@ -34,7 +34,7 @@ __forceinline BOOL CS_MOVE_START_RECV(st_Client* pClient, Packet* pPacket)
 	CS_MOVE_START(pClient, moveDir, pos);
 	return TRUE;
 }
-__forceinline BOOL CS_MOVE_STOP_RECV(st_Client* pClient, Packet* pPacket)
+__forceinline BOOL CS_MOVE_STOP_RECV(Player* pClient, Packet* pPacket)
 {
 	MOVE_DIR viewDir;
 	Pos pos;
@@ -43,7 +43,7 @@ __forceinline BOOL CS_MOVE_STOP_RECV(st_Client* pClient, Packet* pPacket)
 	return TRUE;
 }
 
-__forceinline BOOL CS_ATTACK1_RECV(st_Client* pClient, Packet* pPacket)
+__forceinline BOOL CS_ATTACK1_RECV(Player* pClient, Packet* pPacket)
 {
 	MOVE_DIR viewDir;
 	Pos pos;
@@ -52,7 +52,7 @@ __forceinline BOOL CS_ATTACK1_RECV(st_Client* pClient, Packet* pPacket)
 	return TRUE;
 }
 
-__forceinline BOOL CS_ATTACK2_RECV(st_Client* pClient, Packet* pPacket)
+__forceinline BOOL CS_ATTACK2_RECV(Player* pClient, Packet* pPacket)
 {
 	MOVE_DIR viewDir;
 	Pos pos;
@@ -61,7 +61,7 @@ __forceinline BOOL CS_ATTACK2_RECV(st_Client* pClient, Packet* pPacket)
 	return TRUE;
 }
 
-__forceinline BOOL CS_ATTACK3_RECV(st_Client* pClient, Packet* pPacket)
+__forceinline BOOL CS_ATTACK3_RECV(Player* pClient, Packet* pPacket)
 {
 	MOVE_DIR viewDir;
 	Pos pos;
@@ -70,7 +70,7 @@ __forceinline BOOL CS_ATTACK3_RECV(st_Client* pClient, Packet* pPacket)
 	return TRUE;
 }
 
-__forceinline BOOL CS_ECHO_RECV(st_Client* pClient, Packet* pPacket)
+__forceinline BOOL CS_ECHO_RECV(Player* pClient, Packet* pPacket)
 {
 	DWORD dwTime;
 	(*pPacket) >> dwTime;
@@ -78,10 +78,10 @@ __forceinline BOOL CS_ECHO_RECV(st_Client* pClient, Packet* pPacket)
 	return TRUE;
 }
 
-__forceinline BOOL IsSync(Pos serverPos, Pos clientPos)
+__forceinline BOOL IsSync(Pos serverPos, Pos playerPos)
 {
-	BOOL IsYSync = abs(serverPos.shY - clientPos.shY) > dfERROR_RANGE;
-	BOOL IsXSync = abs(serverPos.shX - serverPos.shX) > dfERROR_RANGE;
+	BOOL IsYSync = abs(serverPos.shY - playerPos.shY) > dfERROR_RANGE;
+	BOOL IsXSync = abs(serverPos.shX - playerPos.shX) > dfERROR_RANGE;
 	return IsXSync || IsYSync;
 }
 #pragma optimize("",off)

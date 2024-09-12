@@ -11,8 +11,5 @@ BOOL Session::Init(SOCKET clientSock, DWORD dwClientID, SHORT shIdx)
     lSendBufNum = 0;
     recvRB.ClearBuffer();
     sendRB.ClearBuffer();
-#ifdef IO_RET
-    ullRecv = ullSend = 0;
-#endif
     return TRUE;
 }

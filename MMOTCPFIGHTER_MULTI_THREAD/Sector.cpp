@@ -6,39 +6,114 @@
 #include "Stack.h"
 #include "IHandler.h"
 #include "GameServer.h"
+#include "Update.h"
+#include "MemLog.h"
 
 extern GameServer g_GameServer;
 
 st_SECTOR_CLIENT_INFO g_Sector[dwNumOfSectorVertical][dwNumOfSectorHorizon];
 
-void GetMoveLockInfo(LockInfo* pLockInfo, SectorPos prevSector, SectorPos afterSector)
+int g_iCounter;
+MemLog g_logArr[1001000];
+
+
+void GetMoveLockInfo(SECTOR_AROUND* pMoveSectorAround, SectorPos prevSector, SectorPos afterSector)
 {
-	pLockInfo->iLockNum = 2;
-	// Y가 더 큰쪽이 뒤에 들어감
+	pMoveSectorAround->iCnt = 2;
 	if (prevSector.shY < afterSector.shY)
 	{
-		pLockInfo->lockArr[0] = g_Sector[prevSector.shY][prevSector.shX].srwSectionLock;
-		pLockInfo->lockArr[1] = g_Sector[afterSector.shY][afterSector.shX].srwSectionLock;
+		pMoveSectorAround->Around[0] = prevSector;
+		pMoveSectorAround->Around[1] = afterSector;
 		return;
 	}
 
 	if (prevSector.shY > afterSector.shY)
 	{
-		pLockInfo->lockArr[0] = g_Sector[afterSector.shY][afterSector.shX].srwSectionLock;
-		pLockInfo->lockArr[1] = g_Sector[prevSector.shY][prevSector.shX].srwSectionLock;
+		pMoveSectorAround->Around[0] = afterSector;
+		pMoveSectorAround->Around[1] = prevSector;
 		return;
 	}
 
 	// Y는 같을때 X끼리 비교해서 결정, X가 큰쪽이 더 뒤에 들어감
 	if (prevSector.shX < afterSector.shX)
 	{
-		pLockInfo->lockArr[0] = g_Sector[prevSector.shY][prevSector.shX].srwSectionLock;
-		pLockInfo->lockArr[1] = g_Sector[afterSector.shY][afterSector.shX].srwSectionLock;
+		pMoveSectorAround->Around[0] = prevSector;
+		pMoveSectorAround->Around[1] = afterSector;
 	}
 	else
 	{
-		pLockInfo->lockArr[0] = g_Sector[afterSector.shY][afterSector.shX].srwSectionLock;
-		pLockInfo->lockArr[1] = g_Sector[prevSector.shY][prevSector.shX].srwSectionLock;
+		pMoveSectorAround->Around[0] = afterSector;
+		pMoveSectorAround->Around[1] = prevSector;
+	}
+}
+
+void GetMoveSectorInfo(MOVE_SECTOR_INFO* pOutMSI, SECTOR_AROUND* pMoveSectorAround, SECTOR_AROUND* pRemoveSectorAround, SECTOR_AROUND* pNewSectorAround)
+{
+	int iCnt = 0;
+	for (int i = 0; i < pRemoveSectorAround->iCnt; ++i)
+	{
+		pOutMSI->spArr[iCnt] = pRemoveSectorAround->Around[i];
+		pOutMSI->bExclusive[iCnt++] = FALSE;
+	}
+
+	for (int i = 0; i < pNewSectorAround->iCnt; ++i)
+	{
+		pOutMSI->spArr[iCnt] = pNewSectorAround->Around[i];
+		pOutMSI->bExclusive[iCnt++] = FALSE;
+	}
+
+	for (int i = 0; i < pMoveSectorAround->iCnt; ++i)
+	{
+		pOutMSI->spArr[iCnt] = pMoveSectorAround->Around[i];
+		pOutMSI->bExclusive[iCnt++] = TRUE;
+	}
+
+	pOutMSI->iCnt = iCnt;
+}
+
+__forceinline void ReleaseFailMoveLocks(MOVE_SECTOR_INFO* pMSI, int idx)
+{
+	for (int j = idx - 1; j >= 0; --j)
+	{
+		if (pMSI->bExclusive[j])
+			ReleaseSRWLockExclusive(&g_Sector[pMSI->spArr[j].shY][pMSI->spArr[j].shX].srwSectionLock);
+		else
+			ReleaseSRWLockShared(&g_Sector[pMSI->spArr[j].shY][pMSI->spArr[j].shX].srwSectionLock);
+	}
+}
+
+__forceinline BOOL TryAcquireMoveLock(MOVE_SECTOR_INFO* pMSI)
+{
+	for(int i = 0; i < pMSI->iCnt; ++i)
+	{
+		if (pMSI->bExclusive[i])
+		{
+			if (!TryAcquireSRWLockExclusive(&g_Sector[pMSI->spArr[i].shY][pMSI->spArr[i].shX].srwSectionLock))
+			{
+				ReleaseFailMoveLocks(pMSI, i);
+				return FALSE;
+			}
+		}
+		else
+		{
+			if (!TryAcquireSRWLockShared(&g_Sector[pMSI->spArr[i].shY][pMSI->spArr[i].shX].srwSectionLock))
+			{
+				ReleaseFailMoveLocks(pMSI, i);
+				return FALSE;
+			}
+		}
+	}
+	return TRUE;
+}
+
+__forceinline void ReleaseMoveLock(MOVE_SECTOR_INFO* pMSI)
+{
+	for (int i = pMSI->iCnt - 1; i >= 0; --i)
+	{
+		if (pMSI->bExclusive[i])
+			ReleaseSRWLockExclusive(&g_Sector[pMSI->spArr[i].shY][pMSI->spArr[i].shX].srwSectionLock);
+		else
+			ReleaseSRWLockShared(&g_Sector[pMSI->spArr[i].shY][pMSI->spArr[i].shX].srwSectionLock);
 	}
 }
 
@@ -53,45 +128,70 @@ void InitSectionLock()
 	}
 }
 
-void AddClientAtSector(st_Client* pClient, SectorPos newSectorPos)
+void AddClientAtSector(Player* pClient, SectorPos newSectorPos)
 {
 	LinkToLinkedListLast(&(g_Sector[newSectorPos.shY][newSectorPos.shX].pClientLinkHead), &(g_Sector[newSectorPos.shY][newSectorPos.shX].pClientLinkTail), &(pClient->SectorLink));
-	++(g_Sector[newSectorPos.shY][newSectorPos.shX].dwNumOfClient);
+	++(g_Sector[newSectorPos.shY][newSectorPos.shX].iNumOfClient);
 }
 
-void RemoveClientAtSector(st_Client* pClient, SectorPos oldSectorPos)
+void RemoveClientAtSector(Player* pClient, SectorPos oldSectorPos)
 {
 	UnLinkFromLinkedList(&(g_Sector[oldSectorPos.shY][oldSectorPos.shX].pClientLinkHead), &(g_Sector[oldSectorPos.shY][oldSectorPos.shX].pClientLinkTail), &(pClient->SectorLink));
-	--(g_Sector[oldSectorPos.shY][oldSectorPos.shX].dwNumOfClient);
+	--(g_Sector[oldSectorPos.shY][oldSectorPos.shX].iNumOfClient);
 }
 
 // 락 거는 순서
 // 영향권에서 없어진 섹터 -> 영향권에 들어오는 섹터 -> 섹터 옮기기위한 Exclusive 
 // 락 푸는 순서
 // 섹터 옮기기 위한 Exclusive -> 영향권에 들어오는 섹터 -> 영향권에서 없어진 섹터
-void SectorUpdateAndNotify(st_Client* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove)
+void SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove, BOOL IsUpdate)
 {
-	st_SECTOR_AROUND removeSectorAround;
+	SECTOR_AROUND removeSectorAround;
 	GetRemoveSector(sectorMoveDir, &removeSectorAround, oldSectorPos);
 
-	st_SECTOR_AROUND newSectorAround;
+	SECTOR_AROUND newSectorAround;
 	GetNewSector(sectorMoveDir, &newSectorAround, newSectorPos);
 
-	LockInfo lockInfo;
-	GetMoveLockInfo(&lockInfo, oldSectorPos, newSectorPos);
+	SECTOR_AROUND moveSectorAround;
+	GetMoveLockInfo(&moveSectorAround, oldSectorPos, newSectorPos);
 
 	// 락 걸기
-	AcquireSectorAroundShared(&removeSectorAround);
-	AcquireSectorAroundShared(&newSectorAround);
+	MOVE_SECTOR_INFO moveSectorInfo;
+	GetMoveSectorInfo(&moveSectorInfo, &moveSectorAround, &removeSectorAround, &newSectorAround);
+
+	// 제거되는 섹터, 새로생기는 섹터에 S락, 플레이어가 속한 섹터를 옮기기 위한  E락을 건다. Update ,Start ,Stop모두 Player의 E락을 선점하고, 이때 이동을 위해 섹터에 E락을 걸며 대기하고
+	// 다른 스레드들이 해당 플레이어에게 메시지를 보내기 위해 S락을 걸거나 여타 이유로 E락을 건 후(윗줄에서의 E락이 대기하게 된 원인), 윗줄의 플레이어에게 메시지를 보내기 위해 S락을 걸어 데드락이 발생한다
+	// 이를 방지하기 위해 플레이어에 E락을 선점한 스레드의 경우 S락이 되엇건 E락이 되엇건 섹터의 락 선점에 실패하면 플레이어 E락까지 모두 풀어버리며 뺑뺑이를 도는데 이때 Player가 Release되지 않게하기 위해 
+	// START나 Stop에서 온경우 MoveLock획득실패시 플레이어 E락 해제하고 다시 거는사이의 Release를 막기위해 srwPlayerArrLock에 S락을 건다
+	//if (!IsUpdate)
+	//{
+	//	AcquireSRWLockShared(&g_srwPlayerArrLock);
+	//	WRITE_MEMORY_LOG(SECTOR_UPDATE_AND_NOTIFY,SHARED,ACQUIRE);
+	//}
+	do
+	{
+		if (TryAcquireMoveLock(&moveSectorInfo))
+		{
+			//if (!IsUpdate) {
+			//	ReleaseSRWLockShared(&g_srwPlayerArrLock);
+			//	WRITE_MEMORY_LOG(SECTOR_UPDATE_AND_NOTIFY, SHARED, RELEASE);
+			//}
+
+			break;
+		}
+
+		ReleaseSRWLockExclusive(&pPlayer->playerLock);
+		AcquireSRWLockExclusive(&pPlayer->playerLock);
+	} while (true);
 
 	// 시야에서 없어지는 섹터에는 pPlayer는 포함되지 않기에 pAncient == pPlayer에 대한 예외처리는 하지 않아도 된다.
-	for (BYTE i = 0; i < removeSectorAround.byCount; ++i)
+	for (int i = 0; i < removeSectorAround.iCnt; ++i)
 	{
 		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[removeSectorAround.Around[i].shY][removeSectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
-		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
+		for (int j = 0; j < pSCI->iNumOfClient; ++j)
 		{
-			st_Client* pAncient = LinkToClient(pLink);
+			Player* pAncient = LinkToClient(pLink);
 
 			// 떠나는 애가 원주민들한테 보내기
 			Packet* pSC_DELETE_CHARACTER_LEAVE_TO_ANCIENT = Packet::Alloc();
@@ -107,19 +207,19 @@ void SectorUpdateAndNotify(st_Client* pPlayer, MOVE_DIR sectorMoveDir, SectorPos
 	}
 
 	// 시야에서 들어오는 섹터에는 pPlayer는 포함되지 않기에 pAncient == pPlayer에 대한 예외처리는 하지 않아도 된다.
-	for (BYTE i = 0; i < newSectorAround.byCount; ++i)
+	for (int i = 0; i < newSectorAround.iCnt; ++i)
 	{
 		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[newSectorAround.Around[i].shY][newSectorAround.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
-		for (DWORD j = 0; j < pSCI->dwNumOfClient; ++j)
+		for (int j = 0; j < pSCI->iNumOfClient; ++j)
 		{
-			st_Client* pAncient = LinkToClient(pLink);
+			Player* pAncient = LinkToClient(pLink);
 
 			// 만약 원주민이 움직이고 있다면 위치와 이동방향이 필요하고 이는 Update스레드가 수정 가능하기에 여기서는 락을 건다
 			AcquireSRWLockShared(&pAncient->playerLock);
 			// 생기는 애가 다른애들한테 나 생긴다고 보내기
 			Packet* pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT = Packet::Alloc();
-			MAKE_SC_CREATE_OTHER_CHARACTER(pPlayer->dwID, pPlayer->viewDir, pPlayer->pos, pPlayer->chHp, pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
+			MAKE_SC_CREATE_OTHER_CHARACTER(pPlayer->dwID, pPlayer->viewDir, pPlayer->pos, pPlayer->hp, pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
 			g_GameServer.SendPacket(pAncient->SessionId, pSC_CREATE_OTHER_CHARACTER_NEW_TO_ANCIENT);
 			if (IsMove)
 			{
@@ -130,7 +230,7 @@ void SectorUpdateAndNotify(st_Client* pPlayer, MOVE_DIR sectorMoveDir, SectorPos
 
 			// 원주민이 새로 입장하는 애한테 보내기
 			Packet* pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW = Packet::Alloc();
-			MAKE_SC_CREATE_OTHER_CHARACTER(pAncient->dwID, pAncient->viewDir, pAncient->pos, pAncient->chHp, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
+			MAKE_SC_CREATE_OTHER_CHARACTER(pAncient->dwID, pAncient->viewDir, pAncient->pos, pAncient->hp, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
 			g_GameServer.SendPacket(pPlayer->SessionId, pSC_CREATE_OTHER_CHARACTER_ANCIENT_TO_NEW);
 
 			// 움직인다면 원주민이 새로 입장하는 애한테 움직인다고 보낸다, 이거때문에 위에서 원주민한테 락을 건것이다
@@ -144,20 +244,13 @@ void SectorUpdateAndNotify(st_Client* pPlayer, MOVE_DIR sectorMoveDir, SectorPos
 			ReleaseSRWLockShared(&pAncient->playerLock);
 		}
 	}
-	AcquireSRWLockExclusive(&lockInfo.lockArr[0]);
-	AcquireSRWLockExclusive(&lockInfo.lockArr[1]);
-	// 섹터 리스트에 갱신
 	RemoveClientAtSector(pPlayer, oldSectorPos);
 	AddClientAtSector(pPlayer, newSectorPos);
 
-	ReleaseSRWLockExclusive(&lockInfo.lockArr[1]);
-	ReleaseSRWLockExclusive(&lockInfo.lockArr[0]);
-
-	ReleaseSectorAroundShared(&newSectorAround);
-	ReleaseSectorAroundShared(&removeSectorAround);
+	ReleaseMoveLock(&moveSectorInfo);
 }
 
-void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
+void GetSectorAround(SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
 {
 	// posX, posY에 pos의 좌표값 담기
 	__m128i posY = _mm_set1_epi16(CurSector.shY);
@@ -172,7 +265,7 @@ void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
 	posX = _mm_add_epi16(posX, DirVX);
 
 	__m128i min = _mm_set1_epi16(-1);
-	__m128i max = _mm_set1_epi16(df_SECTOR_HEIGHT);
+	__m128i max = _mm_set1_epi16(dwNumOfSectorVertical);
 
 	// PosX > min ? 0xFFFF : 0
 	__m128i cmpMin = _mm_cmpgt_epi16(posX, min);
@@ -195,35 +288,35 @@ void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
 	SHORT ret[8];
 	_mm_storeu_si128((__m128i*)ret, min);
 
-	BYTE byCnt = 0;
+	int iCnt = 0;
 	for (int i = 0; i < 4; ++i)
 	{
 		if (ret[i] == (short)0xffff)
 		{
-			pOutSectorAround->Around[byCnt].shY = Y[i];
-			pOutSectorAround->Around[byCnt].shX = X[i];
-			++byCnt;
+			pOutSectorAround->Around[iCnt].shY = Y[i];
+			pOutSectorAround->Around[iCnt].shX = X[i];
+			++iCnt;
 		}
 	}
 
-	pOutSectorAround->Around[byCnt].shY = CurSector.shY;
-	pOutSectorAround->Around[byCnt].shX = CurSector.shX;
-	++byCnt;
+	pOutSectorAround->Around[iCnt].shY = CurSector.shY;
+	pOutSectorAround->Around[iCnt].shX = CurSector.shX;
+	++iCnt;
 
 	for (int i = 4; i < 8; ++i)
 	{
 		if (ret[i] == (short)0xffff)
 		{
-			pOutSectorAround->Around[byCnt].shY = Y[i];
-			pOutSectorAround->Around[byCnt].shX = X[i];
-			++byCnt;
+			pOutSectorAround->Around[iCnt].shY = Y[i];
+			pOutSectorAround->Around[iCnt].shX = X[i];
+			++iCnt;
 		}
 	}
-	pOutSectorAround->byCount = byCnt;
+	pOutSectorAround->iCnt = iCnt;
 }
 
 #pragma warning(disable : 6001)
-void GetNewSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos nextSector)
+void GetNewSector(MOVE_DIR dir, SECTOR_AROUND* pOutSectorAround, SectorPos nextSector)
 {
 	MOVE_DIR sectorPosArr[5];
 	BYTE byCnt = 0;
@@ -305,10 +398,10 @@ void GetNewSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos ne
 			++bySectorPosCnt;
 		}
 	}
-	pOutSectorAround->byCount = bySectorPosCnt;
+	pOutSectorAround->iCnt = bySectorPosCnt;
 }
 
-void GetRemoveSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos prevSector)
+void GetRemoveSector(MOVE_DIR dir, SECTOR_AROUND* pOutSectorAround, SectorPos prevSector)
 {
 	MOVE_DIR sectorPosArr[5];
 	BYTE byCnt = 0;
@@ -390,7 +483,7 @@ void GetRemoveSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos
 			++bySectorPosCnt;
 		}
 	}
-	pOutSectorAround->byCount = bySectorPosCnt;
+	pOutSectorAround->iCnt = bySectorPosCnt;
 }
 #pragma warning(default : 6001)
 

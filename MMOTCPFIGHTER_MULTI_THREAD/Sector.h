@@ -6,36 +6,34 @@
 #include "LinkedList.h"
 
 #include "Constant.h"
+#include "Update.h"
+#include <stdio.h>
+#include "MemLog.h"
 
-struct st_Client;
+struct Player;
 
 struct st_SECTOR_CLIENT_INFO
 {
 	LINKED_NODE* pClientLinkHead = nullptr;
 	LINKED_NODE* pClientLinkTail = nullptr;
-	DWORD dwNumOfClient = 0;
+	int iNumOfClient = 0;
 	SRWLOCK srwSectionLock;
-};
-
-struct LockInfo
-{
-	SRWLOCK lockArr[9];
-	int iLockNum;
 };
 
 extern st_SECTOR_CLIENT_INFO g_Sector[dwNumOfSectorVertical][dwNumOfSectorHorizon];
 
 
-struct st_MOVEINFO
+struct MOVE_SECTOR_INFO
 {
-	Pos Prev;
-	Pos Cur;
+	SectorPos spArr[12];
+	int iCnt; // 8 ~ 12;
+	BOOL bExclusive[12];
 };
 
-struct st_SECTOR_AROUND
+struct SECTOR_AROUND
 {
 	SectorPos Around[9];
-	BYTE byCount; // 0 ~ 9
+	int iCnt; // 0 ~ 9
 };
 
 struct st_DirVector
@@ -43,9 +41,6 @@ struct st_DirVector
 	char byY;
 	char byX;
 };
-
-
-
 
 __forceinline BOOL IsValidSector(int iSectorY, int iSectorX)
 {
@@ -136,31 +131,160 @@ static __forceinline BOOL IsValidPos(Pos pos)
 }
 #pragma optimize("",off)
 
-__forceinline void AcquireSectorAroundShared(st_SECTOR_AROUND* pSectorAround)
+__forceinline void AcquireSectorAroundShared(SECTOR_AROUND* pSectorAround)
 {
-	for (BYTE i = 0; i < pSectorAround->byCount; ++i)
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
 		AcquireSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
 }
 
-__forceinline void ReleaseSectorAroundShared(st_SECTOR_AROUND* pSectorAround)
+__forceinline void AcquireSectorAroundExclusive(SECTOR_AROUND* pSectorAround)
 {
-	for (int i = (int)(pSectorAround->byCount) - 1; i >= 0; --i)
-		ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
-}
-
-__forceinline void AcquireSectorAroundExclusive(st_SECTOR_AROUND* pSectorAround)
-{
-	for (BYTE i = 0; i < pSectorAround->byCount; ++i)
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
 		AcquireSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
 }
 
-__forceinline void ReleaseSectorAroundExclusive(st_SECTOR_AROUND* pSectorAround)
+__forceinline BOOL TryAcquireSectorAroundExclusive(SECTOR_AROUND* pSectorAround)
 {
-	for (int i = (int)(pSectorAround->byCount) - 1; i >= 0; --i)
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+	{
+		if (TryAcquireSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+			continue;
+
+		for (int j = i - 1; j >= 0; --j)
+			ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[j].shY][pSectorAround->Around[j].shX].srwSectionLock);
+
+		return FALSE;
+	}
+	return TRUE;
+}
+
+__forceinline BOOL TryAcquireSectorAroundShared(SECTOR_AROUND* pSectorAround)
+{
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+	{
+		if (TryAcquireSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+			continue;
+
+		for (int j = i - 1; j >= 0; --j)
+			ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[j].shY][pSectorAround->Around[j].shX].srwSectionLock);
+
+		return FALSE;
+	}
+	return TRUE;
+}
+
+__forceinline void AcquireSectorAroundShared_IF_PLAYER_EXCLUSIVE_NO_GUARANTEE_ISVALID(Player* pExclusivePlayer, SECTOR_AROUND* pSectorAround)
+{
+	do
+	{
+		if (TryAcquireSectorAroundShared(pSectorAround))
+			break;
+
+		ReleaseSRWLockExclusive(&pExclusivePlayer->playerLock);
+		AcquireSRWLockExclusive(&pExclusivePlayer->playerLock);
+	} while (true);
+}
+
+__forceinline void AcquireSectorAroundExclusive_IF_PLAYER_EXCLUSIVE_NO_GUARANTEE_ISVALID(Player* pExclusivePlayer, SECTOR_AROUND* pSectorAround)
+{
+	// 락을 얻는동안 플레이어가 OnRelease의 호출로 인해 없어지는것을 막는다.
+	do
+	{
+		if (TryAcquireSectorAroundExclusive(pSectorAround))
+			break;
+
+		ReleaseSRWLockExclusive(&pExclusivePlayer->playerLock);
+		AcquireSRWLockExclusive(&pExclusivePlayer->playerLock);
+	} while (true);
+}
+
+__forceinline void AcquireSectorAroundShared_IF_PLAYER_EXCLUSIVE(Player* pExclusivePlayer, SECTOR_AROUND* pSectorAround)
+{
+	// 락을 얻는동안 플레이어가 OnRelease의 호출로 인해 없어지는것을 막는다.
+	//AcquireSRWLockShared(&g_srwPlayerArrLock);
+	//WRITE_MEMORY_LOG(ACQ_SECTOR_AROUND_SHARED_IF_PLAYER_EXCLUSIVE, SHARED, ACQUIRE);
+	do
+	{
+		if (TryAcquireSectorAroundShared(pSectorAround))
+		{
+			//ReleaseSRWLockShared(&g_srwPlayerArrLock);
+			break;
+		}
+
+		ReleaseSRWLockExclusive(&pExclusivePlayer->playerLock);
+		AcquireSRWLockExclusive(&pExclusivePlayer->playerLock);
+	} while (true);
+}
+
+__forceinline void AcquireSectorAroundExclusive_IF_PLAYER_EXCLUSIVE(Player* pExclusivePlayer, SECTOR_AROUND* pSectorAround)
+{
+	// 락을 얻는동안 플레이어가 OnRelease의 호출로 인해 없어지는것을 막는다.
+	//AcquireSRWLockShared(&g_srwPlayerArrLock);
+	//WRITE_MEMORY_LOG(ACQ_SECTOR_AROUND_EXCLUSIVE_IF_PLAYER_EXCLUSIVE, SHARED, ACQUIRE);
+	do
+	{
+		if (TryAcquireSectorAroundExclusive(pSectorAround))
+		{
+			//ReleaseSRWLockShared(&g_srwPlayerArrLock);
+			break;
+		}
+
+		ReleaseSRWLockExclusive(&pExclusivePlayer->playerLock);
+		AcquireSRWLockExclusive(&pExclusivePlayer->playerLock);
+	} while (true);
+}
+
+__forceinline void ReleaseSectorAroundExclusive(SECTOR_AROUND* pSectorAround)
+{
+	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
 		ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
 }
 
-void GetSectorAround(st_SECTOR_AROUND* pOutSectorAround, SectorPos CurSector);
+__forceinline void ReleaseSectorAroundShared(SECTOR_AROUND* pSectorAround)
+{
+	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
+		ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+}
+
+__forceinline BOOL TryAcquireCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos playerSector)
+{
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+	{
+		if (pSectorAround->Around[i].YX == playerSector.YX)
+		{
+			if (TryAcquireSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+				continue;
+		}
+		else
+		{
+			if (TryAcquireSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+				continue;
+		}
+
+		for (int j = i - 1; j >= 0; --j)
+		{
+			if (pSectorAround->Around[j].YX == playerSector.YX)
+				ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[j].shY][pSectorAround->Around[j].shX].srwSectionLock);
+			else
+				ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[j].shY][pSectorAround->Around[j].shX].srwSectionLock);
+		}
+		return FALSE;
+	}
+	return TRUE;
+}
+
+__forceinline void ReleaseCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos playerSector)
+{
+	for (int i = pSectorAround->iCnt - 1; i >= 0; --i)
+	{
+		if (pSectorAround->Around[i].YX == playerSector.YX)
+			ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+		else
+			ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+	}
+}
+
+void GetSectorAround(SECTOR_AROUND* pOutSectorAround, SectorPos CurSector);
 
 
 #pragma optimize("",on)
@@ -173,9 +297,9 @@ __forceinline SectorPos CalcSector(Pos pos)
 }
 #pragma optimize("",off)
 
-void GetNewSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos nextSector);
-void GetRemoveSector(MOVE_DIR dir, st_SECTOR_AROUND* pOutSectorAround, SectorPos prevSector);
-void GetMoveLockInfo(LockInfo* pOutLockInfo, SectorPos prevSector, SectorPos afterSector);
-void AddClientAtSector(st_Client* pClient, SectorPos newSectorPos);
-void RemoveClientAtSector(st_Client* pClient, SectorPos oldSectorPos);
-void SectorUpdateAndNotify(st_Client* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove);
+void GetNewSector(MOVE_DIR dir, SECTOR_AROUND* pOutSectorAround, SectorPos nextSector);
+void GetRemoveSector(MOVE_DIR dir, SECTOR_AROUND* pOutSectorAround, SectorPos prevSector);
+void GetMoveLockInfo(SECTOR_AROUND* pMoveSectorAround, SectorPos prevSector, SectorPos afterSector);
+void AddClientAtSector(Player* pClient, SectorPos newSectorPos);
+void RemoveClientAtSector(Player* pClient, SectorPos oldSectorPos);
+void SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove, BOOL IsUpdate);

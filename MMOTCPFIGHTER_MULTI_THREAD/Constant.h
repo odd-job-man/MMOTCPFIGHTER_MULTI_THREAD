@@ -36,15 +36,15 @@ constexpr int dfATTACK3_RANGE_Y = 20;
 //---------------------------------------------------------------
 // 공격 데미지.
 //---------------------------------------------------------------
-constexpr int dfATTACK1_DAMAGE = 1;
-constexpr int dfATTACK2_DAMAGE = 2;
-constexpr int dfATTACK3_DAMAGE = 3;
+constexpr int dfATTACK1_DAMAGE = 0;
+constexpr int dfATTACK2_DAMAGE = 0;
+constexpr int dfATTACK3_DAMAGE = 0;
 
 //-----------------------------------------------------------------
 // 캐릭터 이동 속도   // 50fps 기준 이동속도
 //-----------------------------------------------------------------
-constexpr int dfSPEED_PLAYER_X = 3;
-constexpr int dfSPEED_PLAYER_Y = 2;
+constexpr int dfSPEED_PLAYER_X = 6;
+constexpr int dfSPEED_PLAYER_Y = 4;
 
 constexpr int df_SECTOR_WIDTH = 160;
 constexpr int df_SECTOR_HEIGHT = 160;
