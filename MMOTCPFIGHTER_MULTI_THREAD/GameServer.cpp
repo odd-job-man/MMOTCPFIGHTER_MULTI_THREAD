@@ -394,8 +394,6 @@ BOOL GameServer::OnConnectionRequest()
 void* GameServer::OnAccept(ID id)
 {
 	Pos playerPos;
-	//playerPos.shY = 300;
-	//playerPos.shX = 300;
 	playerPos.shY = (rand() % (dfRANGE_MOVE_BOTTOM - 1)) + 1;
 	playerPos.shX = (rand() % (dfRANGE_MOVE_RIGHT - 1)) + 1;
 
@@ -406,12 +404,14 @@ void* GameServer::OnAccept(ID id)
 	SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, sector);
 	AcquireSRWLockExclusive(&g_srwPlayerArrLock);
-	//WRITE_MEMORY_LOG(ONACCEPT, EXCLUSIVE, ACQUIRE);
 	do
 	{
 		AcquireSRWLockExclusive(&pPlayer->playerLock);
 
-		if (TryAcquireSectorAroundExclusive(&sectorAround))
+		//if (TryAcquireSectorAroundExclusive(&sectorAround))
+		//	break;
+
+		if (TryAcquireCreateDeleteSectorLock(&sectorAround, sector))
 			break;
 
 		ReleaseSRWLockExclusive(&pPlayer->playerLock);
@@ -456,7 +456,8 @@ void* GameServer::OnAccept(ID id)
 
 	// Update에서 사용할 배열에 Player를 추가한다.
 	RegisterPlayer(pPlayer);
-	ReleaseSectorAroundExclusive(&sectorAround);
+	//ReleaseSectorAroundExclusive(&sectorAround);
+	ReleaseCreateDeleteSectorLock(&sectorAround, sector);
 	ReleaseSRWLockExclusive(&pPlayer->playerLock);
 	ReleaseSRWLockExclusive(&g_srwPlayerArrLock);
 	return pPlayer;
@@ -470,12 +471,13 @@ void GameServer::OnRelease(void* pPlayer)
 	SECTOR_AROUND sectorAround;
 	GetSectorAround(&sectorAround, lastSector);
 	AcquireSRWLockExclusive(&g_srwPlayerArrLock);
-	//WRITE_MEMORY_LOG(ONRELEASE, EXCLUSIVE, ACQUIRE);
 	do
 	{
 		AcquireSRWLockExclusive(&pRlsPlayer->playerLock);
 
-		if (TryAcquireSectorAroundExclusive(&sectorAround))
+		//if (TryAcquireSectorAroundExclusive(&sectorAround))
+		//	break;
+		if (TryAcquireCreateDeleteSectorLock(&sectorAround, lastSector))
 			break;
 
 		ReleaseSRWLockExclusive(&pRlsPlayer->playerLock);
@@ -498,7 +500,8 @@ void GameServer::OnRelease(void* pPlayer)
 			ReleaseSRWLockShared(&pAncient->playerLock);
 		}
 	}
-	ReleaseSectorAroundExclusive(&sectorAround);
+	//ReleaseSectorAroundExclusive(&sectorAround);
+	ReleaseCreateDeleteSectorLock(&sectorAround, lastSector);
 	ReleasePlayer(pRlsPlayer);
 	ReleaseSRWLockExclusive(&pRlsPlayer->playerLock);
 	ClientFreeList.Free(pRlsPlayer);
