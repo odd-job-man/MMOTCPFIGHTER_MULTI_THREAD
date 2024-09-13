@@ -531,13 +531,6 @@ BOOL AcquireSectorAroundShared_IF_PLAYER_EXCLUSIVE(Player* pExclusivePlayer, SEC
 		if (!g_GameServer.IsPlayerValid(backUpId))
 			return FALSE;
 	}
-
-	// 섹터따기를 성공햇으나 그사이 플레이어가 유효하지 않게되어도 역시 실패이다 
-	if (!g_GameServer.IsPlayerValid(backUpId))
-	{
-		ReleaseSectorAroundShared(pSectorAround);
-		return FALSE;
-	}
 	return TRUE;
 }
 
@@ -552,14 +545,6 @@ BOOL AcquireSectorAroundExclusive_IF_PLAYER_EXCLUSIVE(Player* pExclusivePlayer, 
 		if (!g_GameServer.IsPlayerValid(backUpId))
 			return FALSE;
 	}
-
-	// 섹터따기를 성공햇으나 그사이 플레이어가 유효하지 않게되어도 역시 실패이다 
-	if (!g_GameServer.IsPlayerValid(backUpId))
-	{
-		ReleaseSectorAroundExclusive(pSectorAround);
-		return FALSE;
-	}
-
 	return TRUE;
 }
 

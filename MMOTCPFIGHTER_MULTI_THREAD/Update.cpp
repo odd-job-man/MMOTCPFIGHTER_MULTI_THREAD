@@ -17,7 +17,14 @@ void Update()
 	for (DWORD i = 0; i < g_dwPlayerNum; ++i)
 	{
 		Player* pPlayer = g_playerArr[i];
+
+		// MoveStart나 Stop진행중에 해당 함수들에서 플레이어의 락을 해제하더라도 도중에 좌표가 바뀌지 않도록 한다
 		AcquireSRWLockExclusive(&pPlayer->playerLock);
+		while (pPlayer->bMoveOrStopInProgress)
+		{
+			ReleaseSRWLockExclusive(&pPlayer->playerLock);
+			AcquireSRWLockExclusive(&pPlayer->playerLock);
+		}
 
 		if (pPlayer->moveDir == MOVE_DIR_NOMOVE)
 		{

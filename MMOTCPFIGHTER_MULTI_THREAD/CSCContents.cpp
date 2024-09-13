@@ -64,7 +64,7 @@ __forceinline void ProcessPlayerViewDir(Player* pMoveStartPlayer, MOVE_DIR moveD
 	}
 }
 
-BOOL SyncProc(Player* pSyncPlayer, SectorPos recvSector)
+BOOL SyncProc(Player* pSyncPlayer,SectorPos recvSector)
 {
 	InterlockedIncrement(&g_SyncCnt);
 	SECTOR_AROUND sectorAround;
@@ -310,6 +310,7 @@ Player* HandleCollision_AND_ACQUIRE_EXCLUSIVE_ON_HIT(Pos attackerPos, MOVE_DIR a
 BOOL CS_MOVE_START(Player* pPlayer, MOVE_DIR moveDir, Pos playerPos)
 {
 	AcquireSRWLockExclusive(&pPlayer->playerLock);
+	pPlayer->bMoveOrStopInProgress = TRUE;
 	SectorPos oldSector = CalcSector(pPlayer->pos);
 
 	// 클라이언트 시선처리
@@ -375,6 +376,7 @@ BOOL CS_MOVE_START(Player* pPlayer, MOVE_DIR moveDir, Pos playerPos)
 		}
 	}
 	ReleaseSectorAroundShared(&sectorAround);
+	pPlayer->bMoveOrStopInProgress = FALSE;
 	ReleaseSRWLockExclusive(&pPlayer->playerLock);
     return TRUE;
 }
@@ -382,9 +384,9 @@ BOOL CS_MOVE_START(Player* pPlayer, MOVE_DIR moveDir, Pos playerPos)
 BOOL CS_MOVE_STOP(Player* pPlayer, MOVE_DIR viewDir, Pos playerPos)
 {
 	AcquireSRWLockExclusive(&pPlayer->playerLock);
+	pPlayer->bMoveOrStopInProgress = TRUE;
 	SectorPos oldSector = CalcSector(pPlayer->pos);
 	pPlayer->moveDir = MOVE_DIR_NOMOVE;
-
 	do
 	{
 		if (IsSync(pPlayer->pos, playerPos) == FALSE)
@@ -441,8 +443,8 @@ BOOL CS_MOVE_STOP(Player* pPlayer, MOVE_DIR viewDir, Pos playerPos)
 			pLink = pLink->pNext;
 		}
 	}
-
 	ReleaseSectorAroundShared(&sectorAround);
+	pPlayer->bMoveOrStopInProgress = FALSE;
 	ReleaseSRWLockExclusive(&pPlayer->playerLock);
     return TRUE;
 }
