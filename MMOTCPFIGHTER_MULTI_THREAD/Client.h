@@ -23,7 +23,6 @@ struct Player
 	LINKED_NODE SectorLink;
 	HitInfo hitInfo;
 	DWORD dwUpdateArrIdx;
-	BOOL bMoveOrStopInProgress;
 #pragma warning(disable : 26495)
 	Player()
 	{
@@ -39,7 +38,6 @@ struct Player
 		this->viewDir = MOVE_DIR_LL;
 		this->moveDir = MOVE_DIR_NOMOVE;
 		this->hp = INIT_HP;
-		this->bMoveOrStopInProgress = FALSE;
 	}
 };
 

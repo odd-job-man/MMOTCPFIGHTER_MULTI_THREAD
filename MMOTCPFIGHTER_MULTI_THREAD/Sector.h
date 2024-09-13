@@ -26,6 +26,31 @@ struct SECTOR_AROUND
 	int iCnt; // 0 ~ 9
 };
 
+struct START_STOP_INFO
+{
+	SECTOR_AROUND* pDisappearingSectorS;
+	SECTOR_AROUND* pIncomingSectorS;
+	SECTOR_AROUND* pMOVE_START_OR_STOP_AROUND;
+	SectorPos* pOldSectorPos;
+	SectorPos* pNewSectorPos;
+
+	__forceinline BOOL IsSync()
+	{
+		return !pOldSectorPos && !pNewSectorPos;
+	}
+
+	__forceinline BOOL Init(SECTOR_AROUND* pDisappearingSectorS_NULLABLE, SECTOR_AROUND* pIncomingSectorS_NULLABLE, SECTOR_AROUND* pMOVE_START_OR_STOP_AROUND, SectorPos* pOldSectorPos_NULLABLE, SectorPos* pNewSectorPos_NULLABLE)
+	{
+		this->pDisappearingSectorS = pDisappearingSectorS_NULLABLE;
+		this->pIncomingSectorS = pIncomingSectorS_NULLABLE;
+		this->pMOVE_START_OR_STOP_AROUND = pMOVE_START_OR_STOP_AROUND;
+		this->pOldSectorPos = pOldSectorPos_NULLABLE;
+		this->pNewSectorPos = pNewSectorPos_NULLABLE;
+		return TRUE;
+	}
+};
+
+
 struct st_DirVector
 {
 	char byY;
@@ -131,13 +156,20 @@ void ReleaseSectorAroundExclusive(SECTOR_AROUND* pSectorAround);
 void ReleaseSectorAroundShared(SECTOR_AROUND* pSectorAround);
 BOOL TryAcquireCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos playerSector);
 void ReleaseCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos playerSector);
+BOOL AcquireStartStopInfoLock_IF_PLAYER_EXCLUSIVE(Player* pPlayer, START_STOP_INFO* pSSI);
+void ReleaseStartStopInfo(START_STOP_INFO* pSSI);
+
+BOOL TryAcquireMoveLock(MOVE_SECTOR_INFO* pMSI);
+void ReleaseMoveLock(MOVE_SECTOR_INFO* pMSI);
+void ReleaseFailMoveLocks(MOVE_SECTOR_INFO* pMSI, int idx);
+void GetMoveSectorS(SECTOR_AROUND* pMoveSectorAround, SectorPos prevSector, SectorPos afterSector);
+void GetMoveSectorInfo(MOVE_SECTOR_INFO* pOutMSI, SECTOR_AROUND* pMoveSectorS, SECTOR_AROUND* pDisappearingSectorS, SECTOR_AROUND* pIncomingSectorS);
 
 void GetNewSector(MOVE_DIR dir, SECTOR_AROUND* pOutSectorAround, SectorPos nextSector);
 void GetRemoveSector(MOVE_DIR dir, SECTOR_AROUND* pOutSectorAround, SectorPos prevSector);
-void GetMoveLockInfo(SECTOR_AROUND* pMoveSectorAround, SectorPos prevSector, SectorPos afterSector);
 void AddClientAtSector(Player* pClient, SectorPos newSectorPos);
 void RemoveClientAtSector(Player* pClient, SectorPos oldSectorPos);
-BOOL SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove);
+void BroadcastCreateAndDelete_ON_START_OR_STOP(Player* pPlayer, SECTOR_AROUND* pIncomingSectorS, SECTOR_AROUND* pDisappearingSectorS, BOOL IsMove);
 void GetSectorAround(SECTOR_AROUND* pOutSectorAround, SectorPos CurSector);
 
 

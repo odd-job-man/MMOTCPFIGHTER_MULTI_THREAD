@@ -11,6 +11,8 @@
 #include "MemLog.h"
 #include "Constant.h"
 #include "Sector.h"
+#include <stdio.h>
+//#define LOG
 
 extern GameServer g_GameServer;
 
@@ -20,7 +22,7 @@ int g_iCounter;
 MemLog g_logArr[1001000];
 
 
-void GetMoveLockInfo(SECTOR_AROUND* pMoveSectorAround, SectorPos prevSector, SectorPos afterSector)
+void GetMoveSectorS(SECTOR_AROUND* pMoveSectorAround, SectorPos prevSector, SectorPos afterSector)
 {
 	pMoveSectorAround->iCnt = 2;
 	if (prevSector.shY < afterSector.shY)
@@ -50,31 +52,31 @@ void GetMoveLockInfo(SECTOR_AROUND* pMoveSectorAround, SectorPos prevSector, Sec
 	}
 }
 
-void GetMoveSectorInfo(MOVE_SECTOR_INFO* pOutMSI, SECTOR_AROUND* pMoveSectorAround, SECTOR_AROUND* pRemoveSectorAround, SECTOR_AROUND* pNewSectorAround)
+void GetMoveSectorInfo(MOVE_SECTOR_INFO* pOutMSI, SECTOR_AROUND* pMoveSectorS, SECTOR_AROUND* pDisappearingSectorS, SECTOR_AROUND* pIncomingSectorS)
 {
 	int iCnt = 0;
-	for (int i = 0; i < pRemoveSectorAround->iCnt; ++i)
+	for (int i = 0; i < pDisappearingSectorS->iCnt; ++i)
 	{
-		pOutMSI->spArr[iCnt] = pRemoveSectorAround->Around[i];
+		pOutMSI->spArr[iCnt] = pDisappearingSectorS->Around[i];
 		pOutMSI->bExclusive[iCnt++] = FALSE;
 	}
 
-	for (int i = 0; i < pNewSectorAround->iCnt; ++i)
+	for (int i = 0; i < pIncomingSectorS->iCnt; ++i)
 	{
-		pOutMSI->spArr[iCnt] = pNewSectorAround->Around[i];
+		pOutMSI->spArr[iCnt] = pIncomingSectorS->Around[i];
 		pOutMSI->bExclusive[iCnt++] = FALSE;
 	}
 
-	for (int i = 0; i < pMoveSectorAround->iCnt; ++i)
+	for (int i = 0; i < pMoveSectorS->iCnt; ++i)
 	{
-		pOutMSI->spArr[iCnt] = pMoveSectorAround->Around[i];
+		pOutMSI->spArr[iCnt] = pMoveSectorS->Around[i];
 		pOutMSI->bExclusive[iCnt++] = TRUE;
 	}
 
 	pOutMSI->iCnt = iCnt;
 }
 
-__forceinline void ReleaseFailMoveLocks(MOVE_SECTOR_INFO* pMSI, int idx)
+void ReleaseFailMoveLocks(MOVE_SECTOR_INFO* pMSI, int idx)
 {
 	for (int j = idx - 1; j >= 0; --j)
 	{
@@ -85,7 +87,7 @@ __forceinline void ReleaseFailMoveLocks(MOVE_SECTOR_INFO* pMSI, int idx)
 	}
 }
 
-__forceinline BOOL TryAcquireMoveLock(MOVE_SECTOR_INFO* pMSI)
+BOOL TryAcquireMoveLock(MOVE_SECTOR_INFO* pMSI)
 {
 	for(int i = 0; i < pMSI->iCnt; ++i)
 	{
@@ -106,20 +108,71 @@ __forceinline BOOL TryAcquireMoveLock(MOVE_SECTOR_INFO* pMSI)
 			}
 		}
 	}
+#ifdef LOG
+	for (int i = 0; i < pMSI->iCnt; ++i)
+	{
+		if (pMSI->bExclusive[i])
+			WRITE_MEMORY_LOG(TRY_ACQUIRE_MOVE_LOCK, EXCLUSIVE, ACQUIRE, pMSI->spArr[i]);
+		else
+			WRITE_MEMORY_LOG(TRY_ACQUIRE_MOVE_LOCK, SHARED, ACQUIRE, pMSI->spArr[i]);
+	}
+#endif
 	return TRUE;
 }
 
-__forceinline void ReleaseMoveLock(MOVE_SECTOR_INFO* pMSI)
+void ReleaseMoveLock(MOVE_SECTOR_INFO* pMSI)
 {
 	for (int i = pMSI->iCnt - 1; i >= 0; --i)
 	{
 		if (pMSI->bExclusive[i])
+		{
 			ReleaseSRWLockExclusive(&g_Sector[pMSI->spArr[i].shY][pMSI->spArr[i].shX].srwSectionLock);
+		}
 		else
+		{
 			ReleaseSRWLockShared(&g_Sector[pMSI->spArr[i].shY][pMSI->spArr[i].shX].srwSectionLock);
+		}
 	}
+#ifdef LOG
+	for (int i = pMSI->iCnt - 1; i >= 0; --i)
+	{
+		if (pMSI->bExclusive[i])
+			WRITE_MEMORY_LOG(RELEASE_MOVE_LOCK, EXCLUSIVE, RELEASE, pMSI->spArr[i]);
+		else
+			WRITE_MEMORY_LOG(RELEASE_MOVE_LOCK, SHARED, RELEASE, pMSI->spArr[i]);
+	}
+#endif
 }
 
+__forceinline void ReleaseSharedZeroToIdx(SECTOR_AROUND* pSectorAround, int idx)
+{
+	for (int i = idx - 1; i >= 0; --i)
+		ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+#ifdef LOG
+	for (int i = idx - 1; i >= 0; --i)
+		WRITE_MEMORY_LOG(RELEASE_SHARED_ZERO_TO_IDX, SHARED, RELEASE, pSectorAround->Around[i]);
+#endif 
+}
+
+__forceinline void ReleaseShareAndExclusiveZeroToIdx(SECTOR_AROUND* pSectorAround, SectorPos oldSectorPos, SectorPos newSectorPos, int idx)
+{
+	for (int i = idx - 1; i >= 0; --i)
+	{
+		if (pSectorAround->Around[i].YX == oldSectorPos.YX || pSectorAround->Around[i].YX == newSectorPos.YX)
+			ReleaseSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+		else
+			ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
+	}
+#ifdef LOG
+	for (int i = idx - 1; i >= 0; --i)
+	{
+		if (pSectorAround->Around[i].YX == oldSectorPos.YX || pSectorAround->Around[i].YX == newSectorPos.YX)
+			WRITE_MEMORY_LOG(RELEASE_SHARE_AND_EXCLUSIVE_ZERO_TO_IDX, EXCLUSIVE, RELEASE, pSectorAround->Around[i]);
+		else
+			WRITE_MEMORY_LOG(RELEASE_SHARE_AND_EXCLUSIVE_ZERO_TO_IDX, SHARED, RELEASE, pSectorAround->Around[i]);
+	}
+#endif
+}
 void InitSectionLock()
 {
 	for (DWORD i = 0; i < dwNumOfSectorVertical; ++i)
@@ -135,49 +188,22 @@ void AddClientAtSector(Player* pClient, SectorPos newSectorPos)
 {
 	LinkToLinkedListLast(&(g_Sector[newSectorPos.shY][newSectorPos.shX].pClientLinkHead), &(g_Sector[newSectorPos.shY][newSectorPos.shX].pClientLinkTail), &(pClient->SectorLink));
 	++(g_Sector[newSectorPos.shY][newSectorPos.shX].iNumOfClient);
+	//printf("Player ID : %u Add At %d : %d\n", pClient->dwID, newSectorPos.shX, newSectorPos.shY);
 }
 
 void RemoveClientAtSector(Player* pClient, SectorPos oldSectorPos)
 {
 	UnLinkFromLinkedList(&(g_Sector[oldSectorPos.shY][oldSectorPos.shX].pClientLinkHead), &(g_Sector[oldSectorPos.shY][oldSectorPos.shX].pClientLinkTail), &(pClient->SectorLink));
 	--(g_Sector[oldSectorPos.shY][oldSectorPos.shX].iNumOfClient);
+	//printf("Player ID : %u Remove At %d : %d\n", pClient->dwID, oldSectorPos.shX, oldSectorPos.shY);
 }
 
-BOOL SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos oldSectorPos, SectorPos newSectorPos, BOOL IsMove)
+void BroadcastCreateAndDelete_ON_START_OR_STOP(Player* pPlayer, SECTOR_AROUND* pIncomingSectorS, SECTOR_AROUND* pDisappearingSectorS, BOOL IsMove)
 {
-	SECTOR_AROUND removeSectorAround;
-	GetRemoveSector(sectorMoveDir, &removeSectorAround, oldSectorPos);
-
-	SECTOR_AROUND newSectorAround;
-	GetNewSector(sectorMoveDir, &newSectorAround, newSectorPos);
-
-	SECTOR_AROUND moveSectorAround;
-	GetMoveLockInfo(&moveSectorAround, oldSectorPos, newSectorPos);
-
-	// 락 걸기
-	MOVE_SECTOR_INFO moveSectorInfo;
-	GetMoveSectorInfo(&moveSectorInfo, &moveSectorAround, &removeSectorAround, &newSectorAround);
-
-
-	ID backUpId = pPlayer->SessionId;
-	while (!TryAcquireMoveLock(&moveSectorInfo))
-	{
-		ReleaseSRWLockExclusive(&pPlayer->playerLock);
-		AcquireSRWLockExclusive(&pPlayer->playerLock);
-		if (!g_GameServer.IsPlayerValid(backUpId))
-			return FALSE;
-	}
-
-	if (!g_GameServer.IsPlayerValid(backUpId))
-	{
-		ReleaseMoveLock(&moveSectorInfo);
-		return FALSE;
-	}
-
 	// 시야에서 없어지는 섹터에는 pPlayer는 포함되지 않기에 pAncient == pPlayer에 대한 예외처리는 하지 않아도 된다.
-	for (int i = 0; i < removeSectorAround.iCnt; ++i)
+	for (int i = 0; i < pDisappearingSectorS->iCnt; ++i)
 	{
-		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[removeSectorAround.Around[i].shY][removeSectorAround.Around[i].shX];
+		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[pDisappearingSectorS->Around[i].shY][pDisappearingSectorS->Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
 		for (int j = 0; j < pSCI->iNumOfClient; ++j)
 		{
@@ -197,9 +223,9 @@ BOOL SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos ol
 	}
 
 	// 시야에서 들어오는 섹터에는 pPlayer는 포함되지 않기에 pAncient == pPlayer에 대한 예외처리는 하지 않아도 된다.
-	for (int i = 0; i < newSectorAround.iCnt; ++i)
+	for (int i = 0; i < pIncomingSectorS->iCnt; ++i)
 	{
-		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[newSectorAround.Around[i].shY][newSectorAround.Around[i].shX];
+		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[pIncomingSectorS->Around[i].shY][pIncomingSectorS->Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
 		for (int j = 0; j < pSCI->iNumOfClient; ++j)
 		{
@@ -234,11 +260,6 @@ BOOL SectorUpdateAndNotify(Player* pPlayer, MOVE_DIR sectorMoveDir, SectorPos ol
 			ReleaseSRWLockShared(&pAncient->playerLock);
 		}
 	}
-	RemoveClientAtSector(pPlayer, oldSectorPos);
-	AddClientAtSector(pPlayer, newSectorPos);
-
-	ReleaseMoveLock(&moveSectorInfo);
-	return TRUE;
 }
 
 void GetSectorAround(SECTOR_AROUND* pOutSectorAround, SectorPos CurSector)
@@ -520,6 +541,26 @@ BOOL TryAcquireSectorAroundShared(SECTOR_AROUND* pSectorAround)
 	return TRUE;
 }
 
+BOOL TryAcquireSectorAroundSharedAndExclusive(SECTOR_AROUND* pSectorAround, SectorPos oldSectorPos, SectorPos newSectorPos)
+{
+	for (int i = 0; i < pSectorAround->iCnt; ++i)
+	{
+		if (pSectorAround->Around[i].YX == oldSectorPos.YX || pSectorAround->Around[i].YX == newSectorPos.YX)
+		{
+			if (TryAcquireSRWLockExclusive(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+				continue;
+		}
+		else
+		{
+			if (TryAcquireSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock))
+				continue;
+		}
+		ReleaseShareAndExclusiveZeroToIdx(pSectorAround, oldSectorPos, newSectorPos, i);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 BOOL AcquireSectorAroundShared_IF_PLAYER_EXCLUSIVE(Player* pExclusivePlayer, SECTOR_AROUND* pSectorAround)
 {
 	ID backUpId = pExclusivePlayer->SessionId;
@@ -597,4 +638,63 @@ void ReleaseCreateDeleteSectorLock(SECTOR_AROUND* pSectorAround, SectorPos playe
 			ReleaseSRWLockShared(&g_Sector[pSectorAround->Around[i].shY][pSectorAround->Around[i].shX].srwSectionLock);
 	}
 }
+
+
+BOOL AcquireStartStopInfoLock_IF_PLAYER_EXCLUSIVE(Player* pPlayer, START_STOP_INFO* pSSI)
+{
+	SECTOR_AROUND* pMOVE_START_OR_STOP_AROUND = pSSI->pMOVE_START_OR_STOP_AROUND;
+	SECTOR_AROUND* pDisappearingSectorS = pSSI->pDisappearingSectorS;
+	ID backUpSessionID = pPlayer->SessionId;
+
+	// 싱크상황시
+	if (pSSI->IsSync())
+	{
+		while (!TryAcquireSectorAroundShared(pMOVE_START_OR_STOP_AROUND))
+		{
+			ReleaseSRWLockExclusive(&pPlayer->playerLock);
+			AcquireSRWLockExclusive(&pPlayer->playerLock);
+			if (!g_GameServer.IsPlayerValid(backUpSessionID))
+				return FALSE;
+		}
+		return TRUE;
+	}
+
+	SectorPos prev = *pSSI->pOldSectorPos;
+	SectorPos after = *pSSI->pNewSectorPos;
+
+	lb_first:
+	while (!TryAcquireSectorAroundSharedAndExclusive(pMOVE_START_OR_STOP_AROUND, prev, after))
+	{
+		ReleaseSRWLockExclusive(&pPlayer->playerLock);
+		AcquireSRWLockExclusive(&pPlayer->playerLock);
+		if (!g_GameServer.IsPlayerValid(backUpSessionID))
+			return FALSE;
+	}
+
+	while (!TryAcquireSectorAroundShared(pDisappearingSectorS))
+	{
+		ReleaseShareAndExclusiveZeroToIdx(pMOVE_START_OR_STOP_AROUND, prev, after, pMOVE_START_OR_STOP_AROUND->iCnt);
+		ReleaseSRWLockExclusive(&pPlayer->playerLock);
+		AcquireSRWLockExclusive(&pPlayer->playerLock);
+		if (!g_GameServer.IsPlayerValid(backUpSessionID))
+			return FALSE;
+		goto lb_first;
+	}
+	return TRUE;
+}
+
+void ReleaseStartStopInfo(START_STOP_INFO* pSSI)
+{
+	if (!pSSI->IsSync())
+	{
+		ReleaseSharedZeroToIdx(pSSI->pDisappearingSectorS, pSSI->pDisappearingSectorS->iCnt);
+		ReleaseShareAndExclusiveZeroToIdx(pSSI->pMOVE_START_OR_STOP_AROUND, *pSSI->pOldSectorPos, *pSSI->pNewSectorPos, pSSI->pMOVE_START_OR_STOP_AROUND->iCnt);
+	}
+	else
+	{
+		ReleaseSharedZeroToIdx(pSSI->pMOVE_START_OR_STOP_AROUND, pSSI->pMOVE_START_OR_STOP_AROUND->iCnt);
+	}
+}
+
+
 

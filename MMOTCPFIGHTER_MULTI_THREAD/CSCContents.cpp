@@ -64,18 +64,12 @@ __forceinline void ProcessPlayerViewDir(Player* pMoveStartPlayer, MOVE_DIR moveD
 	}
 }
 
-BOOL SyncProc(Player* pSyncPlayer,SectorPos recvSector)
+void SyncProc(Player* pSyncPlayer, SECTOR_AROUND* pSectorAround_SIMULATED_BY_SERVER)
 {
 	InterlockedIncrement(&g_SyncCnt);
-	SECTOR_AROUND sectorAround;
-	GetSectorAround(&sectorAround, recvSector);
-
-	if (AcquireSectorAroundShared_IF_PLAYER_EXCLUSIVE(pSyncPlayer, &sectorAround) == FALSE)
-		return FALSE;
-
-	for (int i = 0; i < sectorAround.iCnt; ++i)
+	for (int i = 0; i < pSectorAround_SIMULATED_BY_SERVER->iCnt; ++i)
 	{
-		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[sectorAround.Around[i].shY][sectorAround.Around[i].shX];
+		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[pSectorAround_SIMULATED_BY_SERVER->Around[i].shY][pSectorAround_SIMULATED_BY_SERVER->Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
 		for (int i = 0; i < pSCI->iNumOfClient; ++i)
 		{
@@ -87,8 +81,6 @@ BOOL SyncProc(Player* pSyncPlayer,SectorPos recvSector)
 			pLink = pLink->pNext;
 		}
 	}
-	ReleaseSectorAroundShared(&sectorAround);
-	return TRUE;
 }
 
 void FindSectorInAttackRange(Pos pos, MOVE_DIR viewDir, SHORT shAttackRangeY, SHORT shAttackRangeX, SECTOR_AROUND* pSectorAround)
@@ -309,56 +301,56 @@ Player* HandleCollision_AND_ACQUIRE_EXCLUSIVE_ON_HIT(Pos attackerPos, MOVE_DIR a
 
 BOOL CS_MOVE_START(Player* pPlayer, MOVE_DIR moveDir, Pos playerPos)
 {
-	AcquireSRWLockExclusive(&pPlayer->playerLock);
-	pPlayer->bMoveOrStopInProgress = TRUE;
-	SectorPos oldSector = CalcSector(pPlayer->pos);
-
-	// 클라이언트 시선처리
-	ProcessPlayerViewDir(pPlayer, moveDir);
 	pPlayer->moveDir = moveDir;
-
-	do
-	{
-		if (IsSync(pPlayer->pos, playerPos) == FALSE)
-			break;
-
-		if (SyncProc(pPlayer, oldSector) == FALSE)
-		{
-			ReleaseSRWLockExclusive(&pPlayer->playerLock);
-			return FALSE;
-		}
-		playerPos = pPlayer->pos;
-	} while (0);
-	pPlayer->pos = playerPos;
-
+	AcquireSRWLockExclusive(&pPlayer->playerLock);
+	SectorPos oldSector = CalcSector(pPlayer->pos);
 	SectorPos newSector = CalcSector(playerPos);
-	do
-	{
-		if (IsSameSector(oldSector, newSector))
-			break;
 
-		MOVE_DIR sectorMoveDir = GetSectorMoveDir(oldSector, newSector);
-		// 어차피 곧 움직인다고 보낼거기에 지금은 움직인다고 알릴필요 없다.
-		if (!SectorUpdateAndNotify(pPlayer, sectorMoveDir, oldSector, newSector, FALSE))
+	SECTOR_AROUND MOVE_START_AROUND;
+	SECTOR_AROUND disappearingSectorS;
+	SECTOR_AROUND IncomingSectorS;
+	START_STOP_INFO ssi;
+
+
+	// 플레이어 시선처리
+	ProcessPlayerViewDir(pPlayer, moveDir);
+	BOOL bSync = IsSync(pPlayer->pos, playerPos);
+
+	if (IsSameSector(oldSector, newSector) || bSync)
+	{
+		GetSectorAround(&MOVE_START_AROUND, oldSector);
+		ssi.Init(nullptr, nullptr, &MOVE_START_AROUND, nullptr, nullptr);
+		if (!AcquireStartStopInfoLock_IF_PLAYER_EXCLUSIVE(pPlayer, &ssi))
 		{
 			ReleaseSRWLockExclusive(&pPlayer->playerLock);
 			return FALSE;
 		}
-	} while (0);
-
-
-	//움직이기 시작한다고 패킷을 보내야한다.
-	SECTOR_AROUND sectorAround;
-	GetSectorAround(&sectorAround, newSector);
-	if (AcquireSectorAroundShared_IF_PLAYER_EXCLUSIVE(pPlayer, &sectorAround) == FALSE)
+		if (bSync)
+			SyncProc(pPlayer, &MOVE_START_AROUND);
+		newSector = oldSector;
+	}
+	else
 	{
-		ReleaseSRWLockExclusive(&pPlayer->playerLock);
-		return FALSE;
+		pPlayer->pos = playerPos;
+		GetSectorAround(&MOVE_START_AROUND, newSector);
+		MOVE_DIR sectorMoveDir = GetSectorMoveDir(oldSector, newSector);
+		GetRemoveSector(sectorMoveDir, &disappearingSectorS, oldSector);
+		GetNewSector(sectorMoveDir, &IncomingSectorS, newSector);
+		ssi.Init(&disappearingSectorS, &IncomingSectorS, &MOVE_START_AROUND, &oldSector, &newSector);
+		if (!AcquireStartStopInfoLock_IF_PLAYER_EXCLUSIVE(pPlayer, &ssi))
+		{
+			ReleaseSRWLockExclusive(&pPlayer->playerLock);
+			return FALSE;
+		}
+		RemoveClientAtSector(pPlayer, oldSector);
+		AddClientAtSector(pPlayer,newSector);
+		BroadcastCreateAndDelete_ON_START_OR_STOP(pPlayer, &IncomingSectorS, &disappearingSectorS, FALSE);
 	}
 
-	for (int i = 0; i < sectorAround.iCnt; ++i)
+	//움직이기 시작한다고 패킷을 보내야한다.
+	for (int i = 0; i < MOVE_START_AROUND.iCnt; ++i)
 	{
-		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[sectorAround.Around[i].shY][sectorAround.Around[i].shX];
+		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[MOVE_START_AROUND.Around[i].shY][MOVE_START_AROUND.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
 		for (int j = 0; j < pSCI->iNumOfClient; ++j)
 		{
@@ -375,8 +367,7 @@ BOOL CS_MOVE_START(Player* pPlayer, MOVE_DIR moveDir, Pos playerPos)
 			pLink = pLink->pNext;
 		}
 	}
-	ReleaseSectorAroundShared(&sectorAround);
-	pPlayer->bMoveOrStopInProgress = FALSE;
+	ReleaseStartStopInfo(&ssi);
 	ReleaseSRWLockExclusive(&pPlayer->playerLock);
     return TRUE;
 }
@@ -384,49 +375,52 @@ BOOL CS_MOVE_START(Player* pPlayer, MOVE_DIR moveDir, Pos playerPos)
 BOOL CS_MOVE_STOP(Player* pPlayer, MOVE_DIR viewDir, Pos playerPos)
 {
 	AcquireSRWLockExclusive(&pPlayer->playerLock);
-	pPlayer->bMoveOrStopInProgress = TRUE;
-	SectorPos oldSector = CalcSector(pPlayer->pos);
 	pPlayer->moveDir = MOVE_DIR_NOMOVE;
-	do
-	{
-		if (IsSync(pPlayer->pos, playerPos) == FALSE)
-			break;
+	pPlayer->viewDir = viewDir;
 
-		if (SyncProc(pPlayer, oldSector) == FALSE)
-		{
-			ReleaseSRWLockExclusive(&pPlayer->playerLock);
-			return FALSE;
-		}
-		playerPos = pPlayer->pos;
-	} while (0);
-	pPlayer->pos = playerPos;
-
+	SectorPos oldSector = CalcSector(pPlayer->pos);
 	SectorPos newSector = CalcSector(playerPos);
-	do
-	{
-		if (IsSameSector(oldSector, newSector))
-			break;
 
-		MOVE_DIR sectorMoveDir = GetSectorMoveDir(oldSector, newSector);
-		if (SectorUpdateAndNotify(pPlayer, sectorMoveDir, oldSector, newSector, TRUE) == FALSE)
+	SECTOR_AROUND MOVE_STOP_AROUND;
+	SECTOR_AROUND disappearingSectorS;
+	SECTOR_AROUND IncomingSectorS;
+	START_STOP_INFO ssi;
+
+	BOOL bSync = IsSync(pPlayer->pos, playerPos);
+	if (IsSameSector(oldSector,newSector) || IsSync(pPlayer->pos, playerPos))
+	{
+		GetSectorAround(&MOVE_STOP_AROUND, oldSector);
+		ssi.Init(nullptr, nullptr, &MOVE_STOP_AROUND, nullptr, nullptr);
+		if (!AcquireStartStopInfoLock_IF_PLAYER_EXCLUSIVE(pPlayer, &ssi))
 		{
 			ReleaseSRWLockExclusive(&pPlayer->playerLock);
 			return FALSE;
 		}
-	} while (0);
-
-	// 멈춘다고 패킷을 보낸다
-	SECTOR_AROUND sectorAround;
-	GetSectorAround(&sectorAround, newSector);
-	if (AcquireSectorAroundShared_IF_PLAYER_EXCLUSIVE(pPlayer, &sectorAround) == FALSE)
+		if (bSync)
+			SyncProc(pPlayer, &MOVE_STOP_AROUND);
+		newSector = oldSector;
+	}
+	else
 	{
-		ReleaseSRWLockExclusive(&pPlayer->playerLock);
-		return FALSE;
+		pPlayer->pos = playerPos;
+		GetSectorAround(&MOVE_STOP_AROUND, newSector);
+		MOVE_DIR sectorMoveDir = GetSectorMoveDir(oldSector, newSector);
+		GetRemoveSector(sectorMoveDir, &disappearingSectorS, oldSector);
+		GetNewSector(sectorMoveDir, &IncomingSectorS, newSector);
+		ssi.Init(&disappearingSectorS, &IncomingSectorS, &MOVE_STOP_AROUND, &oldSector, &newSector);
+		if (!AcquireStartStopInfoLock_IF_PLAYER_EXCLUSIVE(pPlayer, &ssi))
+		{
+			ReleaseSRWLockExclusive(&pPlayer->playerLock);
+			return FALSE;
+		}
+		RemoveClientAtSector(pPlayer, oldSector);
+		AddClientAtSector(pPlayer,newSector);
+		BroadcastCreateAndDelete_ON_START_OR_STOP(pPlayer, &IncomingSectorS, &disappearingSectorS, TRUE);
 	}
 
-	for (int i = 0; i < sectorAround.iCnt; ++i)
+	for (int i = 0; i < MOVE_STOP_AROUND.iCnt; ++i)
 	{
-		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[sectorAround.Around[i].shY][sectorAround.Around[i].shX];
+		st_SECTOR_CLIENT_INFO* pSCI = &g_Sector[MOVE_STOP_AROUND.Around[i].shY][MOVE_STOP_AROUND.Around[i].shX];
 		LINKED_NODE* pLink = pSCI->pClientLinkHead;
 		for (int j = 0; j < pSCI->iNumOfClient; ++j)
 		{
@@ -443,8 +437,7 @@ BOOL CS_MOVE_STOP(Player* pPlayer, MOVE_DIR viewDir, Pos playerPos)
 			pLink = pLink->pNext;
 		}
 	}
-	ReleaseSectorAroundShared(&sectorAround);
-	pPlayer->bMoveOrStopInProgress = FALSE;
+	ReleaseStartStopInfo(&ssi);
 	ReleaseSRWLockExclusive(&pPlayer->playerLock);
     return TRUE;
 }

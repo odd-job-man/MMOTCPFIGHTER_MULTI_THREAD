@@ -5,7 +5,7 @@
 #include "Sector.h"
 #include "Constant.h"
 #include "Client.h"
-#include "MemLog.h"
+#include "stdio.h"
 
 Player* g_playerArr[MAX_SESSION];
 DWORD g_dwPlayerNum;
@@ -18,14 +18,7 @@ void Update()
 	{
 		Player* pPlayer = g_playerArr[i];
 
-		// MoveStart나 Stop진행중에 해당 함수들에서 플레이어의 락을 해제하더라도 도중에 좌표가 바뀌지 않도록 한다
 		AcquireSRWLockExclusive(&pPlayer->playerLock);
-		while (pPlayer->bMoveOrStopInProgress)
-		{
-			ReleaseSRWLockExclusive(&pPlayer->playerLock);
-			AcquireSRWLockExclusive(&pPlayer->playerLock);
-		}
-
 		if (pPlayer->moveDir == MOVE_DIR_NOMOVE)
 		{
 			ReleaseSRWLockExclusive(&pPlayer->playerLock);
@@ -53,13 +46,31 @@ void Update()
 			ReleaseSRWLockExclusive(&pPlayer->playerLock);
 			continue;
 		}
-
-		MOVE_DIR sectorMoveDir = GetSectorMoveDir(oldSector, newSector);
-
 		// Update는 이미 자료구조에 대한 락을 들고잇기 때문에 뭘하던지 중간에 세션이 릴리즈 될 위험성 자체가 없음
-		SectorUpdateAndNotify(pPlayer, sectorMoveDir, oldSector, newSector, TRUE);
+		MOVE_DIR sectorMoveDir = GetSectorMoveDir(oldSector, newSector);
+		SECTOR_AROUND incomingSectorS;
+		SECTOR_AROUND disappearingSectorS;
+		SECTOR_AROUND moveSectorS;
+		GetNewSector(sectorMoveDir, &incomingSectorS, newSector);
+		GetRemoveSector(sectorMoveDir, &disappearingSectorS, oldSector);
+		GetMoveSectorS(&moveSectorS, oldSector, newSector);
 
-		pPlayer->pos = newPos;
+		Pos backUpPos = newPos;
+		MOVE_SECTOR_INFO msi;
+		GetMoveSectorInfo(&msi, &moveSectorS,&disappearingSectorS,&incomingSectorS);
+		while (!TryAcquireMoveLock(&msi))
+		{
+			ReleaseSRWLockExclusive(&pPlayer->playerLock);
+			AcquireSRWLockExclusive(&pPlayer->playerLock);
+		}
+		if (backUpPos.YX == newPos.YX)
+		{
+			BroadcastCreateAndDelete_ON_START_OR_STOP(pPlayer, &incomingSectorS, &disappearingSectorS, TRUE);
+			RemoveClientAtSector(pPlayer, oldSector);
+			AddClientAtSector(pPlayer, newSector);
+			pPlayer->pos = newPos;
+		}
+		ReleaseMoveLock(&msi);
 		ReleaseSRWLockExclusive(&pPlayer->playerLock);
 	}
 	ReleaseSRWLockShared(&g_srwPlayerArrLock);
